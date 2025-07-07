@@ -130,6 +130,7 @@ class _MyRegisterWidget extends State<RegisterWidget>
         selectedTransport: _selectedTransport,
         wsExtraHeaders: _wsExtraHeaders,
         sipUri: _sipUriController.text,
+        wsUrl: _wsUriController.text,
         port: _portController.text,
         displayName: _displayNameController.text,
         password: _passwordController.text,
@@ -185,13 +186,21 @@ class _MyRegisterWidget extends State<RegisterWidget>
           ),
           SizedBox(height: 15),
           if (_selectedTransport == TransportType.WS) ...[
-            Text('WebSocket', style: TextStyle(color: textLabelColor)),
+            Text('WebSocket URL', style: TextStyle(color: textLabelColor)),
             SizedBox(height: 5),
             TextFormField(
               controller: _wsUriController,
               keyboardType: TextInputType.text,
               autocorrect: false,
               textAlign: TextAlign.center,
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: textFieldFill,
+                border: border,
+                enabledBorder: border,
+                focusedBorder: border,
+                hintText: 'wss://your-server.com:port/path',
+              ),
             ),
           ],
           if (_selectedTransport == TransportType.TCP) ...[
@@ -324,6 +333,6 @@ class _MyRegisterWidget extends State<RegisterWidget>
 
   @override
   void onNewReinvite(ReInvite event) {
-    // TODO: implement onNewReinvite
+    // Handle re-invite events here if needed
   }
 }

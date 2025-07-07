@@ -15,7 +15,7 @@ class SipUserCubit extends Cubit<SipUser?> {
     settings.tcpSocketSettings.allowBadCertificate = true;
     settings.transportType = user.selectedTransport;
     settings.uri = user.sipUri;
-    settings.webSocketUrl = user.wsUrl;
+    settings.webSocketUrl = user.wsUrl ?? user.sipUri?.split('@')[1] ?? '';
     settings.host = user.sipUri?.split('@')[1];
     settings.authorizationUser = user.authUser;
     settings.password = user.password;

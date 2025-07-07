@@ -397,6 +397,6 @@ class _MyDialPadWidget extends State<DialPadWidget>
 
   @override
   void onNewReinvite(ReInvite event) {
-    // TODO: implement onNewReinvite
+    // Handle re-invite events here if needed
   }
 }
