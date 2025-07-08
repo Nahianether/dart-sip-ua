@@ -62,21 +62,48 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   @override
   deactivate() {
     super.deactivate();
-    helper!.removeSipUaHelperListener(this);
-    _disposeRenderers();
+    
+    try {
+      helper!.removeSipUaHelperListener(this);
+    } catch (e) {
+      print('Error removing SIP listener: $e');
+    }
+    
+    try {
+      _timer.cancel();
+    } catch (e) {
+      print('Error canceling timer in deactivate: $e');
+    }
+    
+    try {
+      _disposeRenderers();
+    } catch (e) {
+      print('Error disposing renderers: $e');
+    }
+    
+    _cleanUp();
   }
 
   void _startTimer() {
-    _timer = Timer.periodic(Duration(seconds: 1), (Timer timer) {
-      Duration duration = Duration(seconds: timer.tick);
-      if (mounted) {
-        _timeLabel.value = [duration.inMinutes, duration.inSeconds]
-            .map((seg) => seg.remainder(60).toString().padLeft(2, '0'))
-            .join(':');
-      } else {
-        _timer.cancel();
-      }
-    });
+    try {
+      _timer = Timer.periodic(Duration(seconds: 1), (Timer timer) {
+        try {
+          Duration duration = Duration(seconds: timer.tick);
+          if (mounted) {
+            _timeLabel.value = [duration.inMinutes, duration.inSeconds]
+                .map((seg) => seg.remainder(60).toString().padLeft(2, '0'))
+                .join(':');
+          } else {
+            timer.cancel();
+          }
+        } catch (e) {
+          print('Error in timer tick: $e');
+          timer.cancel();
+        }
+      });
+    } catch (e) {
+      print('Error starting timer: $e');
+    }
   }
 
   void _initRenderers() async {
@@ -89,13 +116,22 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   }
 
   void _disposeRenderers() {
-    if (_localRenderer != null) {
-      _localRenderer!.dispose();
-      _localRenderer = null;
+    try {
+      if (_localRenderer != null) {
+        _localRenderer!.dispose();
+        _localRenderer = null;
+      }
+    } catch (e) {
+      print('Error disposing local renderer: $e');
     }
-    if (_remoteRenderer != null) {
-      _remoteRenderer!.dispose();
-      _remoteRenderer = null;
+    
+    try {
+      if (_remoteRenderer != null) {
+        _remoteRenderer!.dispose();
+        _remoteRenderer = null;
+      }
+    } catch (e) {
+      print('Error disposing remote renderer: $e');
     }
   }
 
@@ -159,20 +195,47 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   void registrationStateChanged(RegistrationState state) {}
 
   void _cleanUp() {
-    if (_localStream == null) return;
-    _localStream?.getTracks().forEach((track) {
-      track.stop();
-    });
-    _localStream!.dispose();
-    _localStream = null;
+    try {
+      if (_localStream != null) {
+        _localStream?.getTracks().forEach((track) {
+          try {
+            track.stop();
+          } catch (e) {
+            print('Error stopping track: $e');
+          }
+        });
+        
+        try {
+          _localStream!.dispose();
+        } catch (e) {
+          print('Error disposing stream: $e');
+        }
+        
+        _localStream = null;
+      }
+    } catch (e) {
+      print('Error in cleanup: $e');
+    }
   }
 
   void _backToDialPad() {
-    _timer.cancel();
-    Timer(Duration(seconds: 2), () {
-      Navigator.of(context).pop();
-    });
+    try {
+      _timer.cancel();
+    } catch (e) {
+      print('Error canceling timer in _backToDialPad: $e');
+    }
+    
     _cleanUp();
+    
+    Timer(Duration(seconds: 2), () {
+      try {
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      } catch (e) {
+        print('Error navigating back: $e');
+      }
+    });
   }
 
   void _handleStreams(CallState event) async {
@@ -214,8 +277,17 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   }
 
   void _handleHangup() {
-    call!.hangup({'status_code': 603});
-    _timer.cancel();
+    try {
+      call!.hangup({'status_code': 603});
+    } catch (e) {
+      print('Error during hangup: $e');
+    }
+    
+    try {
+      _timer.cancel();
+    } catch (e) {
+      print('Error canceling timer: $e');
+    }
   }
 
   void _handleAccept() async {

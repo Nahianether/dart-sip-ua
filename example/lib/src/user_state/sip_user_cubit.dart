@@ -5,7 +5,6 @@ import 'package:sip_ua/sip_ua.dart';
 
 class SipUserCubit extends Cubit<SipUser?> {
   final SIPUAHelper sipHelper;
-  final Logger _logger = Logger();
   SipUserCubit({required this.sipHelper}) : super(null);
 
   void register(SipUser user) {
