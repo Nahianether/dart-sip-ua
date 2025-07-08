@@ -68,16 +68,16 @@ class _MyRegisterWidget extends State<RegisterWidget>
   void _loadSettings() async {
     _preferences = await SharedPreferences.getInstance();
     setState(() {
-      _portController.text = '5060';
+      _portController.text = _preferences.getString('port') ?? '5060';
       _wsUriController.text =
-          _preferences.getString('ws_uri') ?? 'wss://tryit.jssip.net:10443';
+          _preferences.getString('ws_uri') ?? 'wss://sip.ibos.io:8089/ws';
       _sipUriController.text =
-          _preferences.getString('sip_uri') ?? 'hello_flutter@tryit.jssip.net';
+          _preferences.getString('sip_uri') ?? '564613@sip.ibos.io';
       _displayNameController.text =
-          _preferences.getString('display_name') ?? 'Flutter SIP UA';
-      _passwordController.text = _preferences.getString('password') ?? '';
+          _preferences.getString('display_name') ?? '564613';
+      _passwordController.text = _preferences.getString('password') ?? 'iBOS123';
       _authorizationUserController.text =
-          _preferences.getString('auth_user') ?? '';
+          _preferences.getString('auth_user') ?? '564613';
     });
   }
 
@@ -92,6 +92,12 @@ class _MyRegisterWidget extends State<RegisterWidget>
 
   @override
   void registrationStateChanged(RegistrationState state) {
+    print('=== REGISTRATION STATE CHANGED ===');
+    print('State: ${state.state}');
+    print('Cause: ${state.cause}');
+    if (state.cause != null) {
+      print('Cause details: ${state.cause.toString()}');
+    }
     setState(() {
       _registerState = state;
     });
@@ -233,6 +239,7 @@ class _MyRegisterWidget extends State<RegisterWidget>
               border: border,
               enabledBorder: border,
               focusedBorder: border,
+              hintText: 'username@domain.com (without sip:)',
             ),
           ),
           SizedBox(height: 15),

@@ -256,7 +256,12 @@ class Checks {
     },
     'ice_gathering_timeout': (Settings src, Settings? dst) {
       dst!.ice_gathering_timeout = src.ice_gathering_timeout;
-    }
+    },
+    // 'via_host': (Settings src, Settings? dst) {
+    //   if (src.via_host != null && src.via_host!.isNotEmpty) {
+    //     dst!.via_host = src.via_host;
+    //   }
+    // }
   };
 }
 

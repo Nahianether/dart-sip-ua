@@ -159,8 +159,10 @@ class DigestAuthentication {
     // If we have plain SIP password then regenerate ha1.
     if (_credentials.password != null) {
       // HA1 = MD5(A1) = MD5(username:realm:password).
-      _ha1 = utils.calculateMD5(
-          '${_credentials.username}:$_realm:${_credentials.password}');
+      String a1 = '${_credentials.username}:$_realm:${_credentials.password}';
+      print('DEBUG: A1 = $a1');
+      _ha1 = utils.calculateMD5(a1);
+      print('DEBUG: HA1 = $_ha1');
     }
     // Otherwise reuse the stored ha1.
     else {
@@ -199,7 +201,12 @@ class DigestAuthentication {
       logger.d('authenticate() | using qop=null [a2:$a2]');
 
       // Response = MD5(HA1:nonce:HA2).
-      _response = utils.calculateMD5('$_ha1:$_nonce:$ha2');
+      String responseInput = '$_ha1:$_nonce:$ha2';
+      print('DEBUG: A2 = $a2');
+      print('DEBUG: HA2 = $ha2');
+      print('DEBUG: Response input = $responseInput');
+      _response = utils.calculateMD5(responseInput);
+      print('DEBUG: Response = $_response');
     }
 
     logger.d('authenticate() | response generated');

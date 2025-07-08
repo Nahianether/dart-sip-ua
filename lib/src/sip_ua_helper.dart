@@ -188,6 +188,13 @@ class SIPUAHelper extends EventManager {
         uaSettings.sessionTimersRefreshMethod;
     _settings.instance_id = uaSettings.instanceId;
     _settings.registrar_server = uaSettings.registrarServer;
+    // Let via_host use default (random .invalid) like web client
+    // if (uaSettings.host != null && uaSettings.host!.isNotEmpty) {
+    //   _settings.via_host = uaSettings.host;
+    //   logger.d('Setting via_host to: ${uaSettings.host}');
+    // } else {
+    //   logger.w('Host is null or empty, using default via_host');
+    // }
     _settings.contact_uri = uaSettings.contact_uri != null
         ? Utils.normalizeTarget(uaSettings.contact_uri!)
         : null;
