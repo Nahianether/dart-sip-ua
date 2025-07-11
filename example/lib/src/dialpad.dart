@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sip_ua/sip_ua.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
 
 import 'widgets/action_button.dart';
 
@@ -42,9 +43,8 @@ class _MyDialPadWidget extends State<DialPadWidget>
 
   void _loadSettings() async {
     _preferences = await SharedPreferences.getInstance();
-    _dest = _preferences.getString('dest') ?? 'sip:hello_jssip@tryit.jssip.net';
+    _dest = _preferences.getString('dest') ?? '';
     _textController = TextEditingController(text: _dest);
-    _textController!.text = _dest!;
 
     setState(() {});
   }
@@ -161,7 +161,7 @@ class _MyDialPadWidget extends State<DialPadWidget>
 
     return labels
         .map((row) => Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.symmetric(vertical: 8),
             child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: row
@@ -175,63 +175,255 @@ class _MyDialPadWidget extends State<DialPadWidget>
         .toList();
   }
 
-  List<Widget> _buildDialPad() {
-    Color? textFieldColor =
-        Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.5);
-    Color? textFieldFill =
-        Theme.of(context).buttonTheme.colorScheme?.surfaceContainerLowest;
-    return [
-      Align(
-        alignment: AlignmentDirectional.centerStart,
-        child: Text('Destination URL'),
-      ),
-      const SizedBox(height: 8),
-      TextField(
-        keyboardType: TextInputType.text,
-        textAlign: TextAlign.center,
-        style: TextStyle(fontSize: 18, color: textFieldColor),
-        maxLines: 2,
-        decoration: InputDecoration(
-          filled: true,
-          fillColor: textFieldFill,
-          border: OutlineInputBorder(
-            borderSide: BorderSide(color: Colors.blue.withValues(alpha: 0.5)),
-            borderRadius: BorderRadius.circular(5),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: Colors.blue.withValues(alpha: 0.5)),
-            borderRadius: BorderRadius.circular(5),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: Colors.blue.withValues(alpha: 0.5)),
-            borderRadius: BorderRadius.circular(5),
-          ),
+  Future<void> _pickContact() async {
+    try {
+      // Check current permission status
+      final permissionStatus = await Permission.contacts.status;
+      
+      if (permissionStatus.isGranted) {
+        final contact = await FlutterContacts.openExternalPick();
+        if (contact != null) {
+          if (contact.phones.isNotEmpty) {
+            final phoneNumber = contact.phones.first.number;
+            setState(() {
+              _textController!.text = phoneNumber;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Contact added: ${contact.displayName}'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Selected contact has no phone number'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        }
+      } else if (permissionStatus.isDenied) {
+        // Try to request permission again
+        final newStatus = await Permission.contacts.request();
+        if (newStatus.isGranted) {
+          _pickContact(); // Retry after permission granted
+        } else {
+          _showPermissionDialog();
+        }
+      } else if (permissionStatus.isPermanentlyDenied) {
+        _showPermissionDialog();
+      }
+    } catch (e) {
+      print('Error picking contact: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error accessing contacts. Please try again.'),
+          duration: Duration(seconds: 3),
         ),
-        controller: _textController,
+      );
+    }
+  }
+
+  void _showPermissionDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Contacts Permission Required'),
+        content: Text(
+          'To pick contacts, please grant contacts permission in your device settings.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              openAppSettings();
+            },
+            child: Text('Open Settings'),
+          ),
+        ],
       ),
-      SizedBox(height: 20),
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: _buildNumPad(),
+    );
+  }
+
+  Future<void> _debugPermissions() async {
+    print('🔍 DEBUGGING PERMISSIONS...');
+    
+    try {
+      // Check all permission statuses
+      final contactsStatus = await Permission.contacts.status;
+      final microphoneStatus = await Permission.microphone.status;
+      final cameraStatus = await Permission.camera.status;
+      
+      print('📱 Current Permission Status:');
+      print('  - Contacts: ${contactsStatus.name} (${contactsStatus.toString()})');
+      print('  - Microphone: ${microphoneStatus.name}');
+      print('  - Camera: ${cameraStatus.name}');
+      
+      // Force request contacts permission
+      print('🔄 Requesting contacts permission...');
+      final newContactsStatus = await Permission.contacts.request();
+      print('📞 New contacts status: ${newContactsStatus.name}');
+      
+      // Show debug info to user
+      String debugInfo = 'Permission Debug Info:\n\n';
+      debugInfo += 'Contacts: ${newContactsStatus.name}\n';
+      debugInfo += 'Microphone: ${microphoneStatus.name}\n';
+      debugInfo += 'Camera: ${cameraStatus.name}\n\n';
+      
+      if (newContactsStatus.isGranted) {
+        debugInfo += '✅ Contacts permission is granted!\n';
+        debugInfo += 'The contact picker should work now.';
+      } else if (newContactsStatus.isDenied) {
+        debugInfo += '❌ Contacts permission was denied.\n';
+        debugInfo += 'Please check your device settings.';
+      } else if (newContactsStatus.isPermanentlyDenied) {
+        debugInfo += '🚫 Contacts permission is permanently denied.\n';
+        debugInfo += 'Please enable it in device settings.';
+      } else {
+        debugInfo += '❓ Contacts permission status: ${newContactsStatus.name}';
+      }
+      
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Debug Information'),
+          content: SingleChildScrollView(
+            child: Text(debugInfo),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('OK'),
+            ),
+            if (!newContactsStatus.isGranted)
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  openAppSettings();
+                },
+                child: Text('Open Settings'),
+              ),
+          ],
+        ),
+      );
+      
+    } catch (e) {
+      print('❌ Debug error: $e');
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Debug Error'),
+          content: Text('Error checking permissions: $e'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  List<Widget> _buildDialPad() {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    
+    return [
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Destination',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: colorScheme.onSurface.withValues(alpha: 0.8),
+                    ),
+                  ),
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextButton.icon(
+                      onPressed: _pickContact,
+                      icon: Icon(Icons.contact_phone, size: 18),
+                      label: Text('Contacts'),
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    TextButton.icon(
+                      onPressed: _debugPermissions,
+                      icon: Icon(Icons.bug_report, size: 16),
+                      label: Text('Debug'),
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        textStyle: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              keyboardType: TextInputType.text,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyLarge?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
+              maxLines: 2,
+              decoration: const InputDecoration(
+                hintText: 'Enter SIP URI or number',
+                suffixIcon: Icon(Icons.dialpad),
+              ),
+              controller: _textController,
+            ),
+          ],
+        ),
       ),
+      const SizedBox(height: 24),
       Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: _buildNumPad(),
+        ),
+      ),
+      const SizedBox(height: 24),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: <Widget>[
             ActionButton(
-              icon: Icons.videocam,
+              icon: Icons.videocam_outlined,
+              title: 'Video',
               onPressed: () => _handleCall(context),
             ),
             ActionButton(
-              icon: Icons.dialer_sip,
-              fillColor: Colors.green,
+              icon: Icons.call,
+              title: 'Call',
+              fillColor: theme.colorScheme.primary,
+              checked: true,
               onPressed: () => _handleCall(context, true),
             ),
             ActionButton(
-              icon: Icons.keyboard_arrow_left,
+              icon: Icons.backspace_outlined,
+              title: 'Clear',
               onPressed: () => _handleBackSpace(),
               onLongPress: () => _handleBackSpace(true),
             ),
@@ -243,107 +435,176 @@ class _MyDialPadWidget extends State<DialPadWidget>
 
   @override
   Widget build(BuildContext context) {
-    Color? textColor = Theme.of(context).textTheme.bodyMedium?.color;
-    Color? iconColor = Theme.of(context).iconTheme.color;
-    bool isDarkTheme = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    bool isDarkTheme = theme.brightness == Brightness.dark;
     currentUserCubit = context.watch<SipUserCubit>();
 
     return Scaffold(
       appBar: AppBar(
-        title: Text("Dart SIP UA Demo"),
+        title: Text(
+          "SIP Phone",
+          style: theme.textTheme.headlineMedium,
+        ),
+        centerTitle: true,
         actions: <Widget>[
-          PopupMenuButton<String>(
-              onSelected: (String value) {
-                switch (value) {
-                  case 'account':
-                    Navigator.pushNamed(context, '/register');
-                    break;
-                  case 'about':
-                    Navigator.pushNamed(context, '/about');
-                    break;
-                  case 'theme':
-                    final themeProvider = Provider.of<ThemeProvider>(context,
-                        listen:
-                            false); // get the provider, listen false is necessary cause is in a function
-
-                    setState(() {
-                      isDarkTheme = !isDarkTheme;
-                    }); // change the variable
-
-                    isDarkTheme // call the functions
-                        ? themeProvider.setDarkmode()
-                        : themeProvider.setLightMode();
-                    break;
-                  default:
-                    break;
-                }
-              },
-              icon: Icon(Icons.menu),
-              itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                    PopupMenuItem(
-                      child: Row(
-                        children: <Widget>[
-                          Icon(
-                            Icons.account_circle,
-                            color: iconColor,
-                          ),
-                          SizedBox(width: 12),
-                          Text('Account'),
-                        ],
+          IconButton(
+            icon: Icon(Icons.more_vert),
+            onPressed: () {
+              showModalBottomSheet(
+                context: context,
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                ),
+                builder: (context) => Container(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ListTile(
+                        leading: Icon(Icons.account_circle_outlined),
+                        title: Text('Account Settings'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          Navigator.pushNamed(context, '/register');
+                        },
                       ),
-                      value: 'account',
-                    ),
-                    PopupMenuItem(
-                      child: Row(
-                        children: <Widget>[
-                          Icon(
-                            Icons.info,
-                            color: iconColor,
-                          ),
-                          SizedBox(width: 12),
-                          Text('About'),
-                        ],
+                      ListTile(
+                        leading: Icon(isDarkTheme ? Icons.light_mode : Icons.dark_mode),
+                        title: Text(isDarkTheme ? 'Light Mode' : 'Dark Mode'),
+                        onTap: () {
+                          final themeProvider = Provider.of<ThemeProvider>(context, listen: false);
+                          setState(() {
+                            isDarkTheme = !isDarkTheme;
+                          });
+                          isDarkTheme
+                              ? themeProvider.setDarkmode()
+                              : themeProvider.setLightMode();
+                          Navigator.pop(context);
+                        },
                       ),
-                      value: 'about',
-                    ),
-                    PopupMenuItem(
-                      child: Row(
-                        children: <Widget>[
-                          Icon(
-                            Icons.info,
-                            color: iconColor,
-                          ),
-                          SizedBox(width: 12),
-                          Text(isDarkTheme ? 'Light Mode' : 'Dark Mode'),
-                        ],
+                      ListTile(
+                        leading: Icon(Icons.info_outline),
+                        title: Text('About'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          Navigator.pushNamed(context, '/about');
+                        },
                       ),
-                      value: 'theme',
-                    )
-                  ]),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
         ],
       ),
-      body: ListView(
-        padding: EdgeInsets.symmetric(horizontal: 12),
-        children: <Widget>[
-          SizedBox(height: 8),
-          Center(
-            child: Text(
-              'Register Status: ${helper!.registerState.state?.name ?? ''}',
-              style: TextStyle(fontSize: 18, color: textColor),
+      body: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            child: Card(
+              elevation: 4,
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: helper!.registerState.state == RegistrationStateEnum.REGISTERED
+                                ? Colors.green.withValues(alpha: 0.1)
+                                : helper!.registerState.state == RegistrationStateEnum.REGISTRATION_FAILED
+                                    ? Colors.red.withValues(alpha: 0.1)
+                                    : Colors.orange.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            helper!.registerState.state == RegistrationStateEnum.REGISTERED
+                                ? Icons.check_circle
+                                : helper!.registerState.state == RegistrationStateEnum.REGISTRATION_FAILED
+                                    ? Icons.error
+                                    : Icons.pending,
+                            color: helper!.registerState.state == RegistrationStateEnum.REGISTERED
+                                ? Colors.green
+                                : helper!.registerState.state == RegistrationStateEnum.REGISTRATION_FAILED
+                                    ? Colors.red
+                                    : Colors.orange,
+                            size: 24,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _getStatusTitle(helper!.registerState.state),
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                  color: helper!.registerState.state == RegistrationStateEnum.REGISTERED
+                                      ? Colors.green
+                                      : helper!.registerState.state == RegistrationStateEnum.REGISTRATION_FAILED
+                                          ? Colors.red
+                                          : Colors.orange,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _getStatusSubtitle(helper!.registerState.state),
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.textTheme.bodySmall?.color?.withValues(alpha: 0.7),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (receivedMsg?.isNotEmpty == true) ...[
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: colorScheme.primary.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.message_outlined,
+                              color: colorScheme.primary,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                receivedMsg!,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: colorScheme.primary,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             ),
           ),
-          SizedBox(height: 8),
-          Center(
-            child: Text(
-              'Received Message: $receivedMsg',
-              style: TextStyle(fontSize: 16, color: textColor),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: _buildDialPad(),
+              ),
             ),
-          ),
-          SizedBox(height: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: _buildDialPad(),
           ),
         ],
       ),
@@ -381,6 +642,32 @@ class _MyDialPadWidget extends State<DialPadWidget>
     if (helper!.registered) await helper!.unregister();
     _logger.i("Re-registering");
     currentUserCubit.register(currentUserCubit.state!);
+  }
+
+  String _getStatusTitle(RegistrationStateEnum? state) {
+    switch (state) {
+      case RegistrationStateEnum.REGISTERED:
+        return 'Connected';
+      case RegistrationStateEnum.REGISTRATION_FAILED:
+        return 'Connection Failed';
+      case RegistrationStateEnum.UNREGISTERED:
+        return 'Disconnected';
+      default:
+        return 'Connecting...';
+    }
+  }
+
+  String _getStatusSubtitle(RegistrationStateEnum? state) {
+    switch (state) {
+      case RegistrationStateEnum.REGISTERED:
+        return 'Ready to make calls';
+      case RegistrationStateEnum.REGISTRATION_FAILED:
+        return 'Check your account settings';
+      case RegistrationStateEnum.UNREGISTERED:
+        return 'Configure your account';
+      default:
+        return 'Please wait...';
+    }
   }
 
   @override

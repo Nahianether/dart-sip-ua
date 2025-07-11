@@ -29,6 +29,9 @@ dependencies:
   flutter_webrtc: ^0.12.6
   provider: 6.1.2
   logger: ^2.5.0
+  flutter_background_service: ^5.0.10
+  flutter_local_notifications: ^18.0.1
+  flutter_contacts: ^1.1.9
 
 dev_dependencies:
   flutter_test:

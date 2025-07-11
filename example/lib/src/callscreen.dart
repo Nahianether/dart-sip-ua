@@ -248,7 +248,7 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
       if (!kIsWeb &&
           !WebRTC.platformIsDesktop &&
           event.stream?.getAudioTracks().isNotEmpty == true) {
-        event.stream?.getAudioTracks().first.enableSpeakerphone(false);
+        event.stream?.getAudioTracks().first.enableSpeakerphone(_speakerOn);
       }
       _localStream = stream;
     }
@@ -425,10 +425,29 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   }
 
   void _toggleSpeaker() {
-    if (_localStream != null) {
+    setState(() {
       _speakerOn = !_speakerOn;
-      if (!kIsWeb) {
-        _localStream!.getAudioTracks()[0].enableSpeakerphone(_speakerOn);
+    });
+    
+    if (_localStream != null && _localStream!.getAudioTracks().isNotEmpty) {
+      try {
+        if (!kIsWeb && !WebRTC.platformIsDesktop) {
+          _localStream!.getAudioTracks()[0].enableSpeakerphone(_speakerOn);
+        }
+        print('Speaker ${_speakerOn ? 'enabled' : 'disabled'}');
+      } catch (e) {
+        print('Error toggling speaker: $e');
+      }
+    }
+    
+    // Also try to toggle speaker on remote stream if available
+    if (_remoteStream != null && _remoteStream!.getAudioTracks().isNotEmpty) {
+      try {
+        if (!kIsWeb && !WebRTC.platformIsDesktop) {
+          _remoteStream!.getAudioTracks()[0].enableSpeakerphone(_speakerOn);
+        }
+      } catch (e) {
+        print('Error toggling speaker on remote stream: $e');
       }
     }
   }
@@ -534,8 +553,9 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
           if (voiceOnly) {
             advanceActions.add(ActionButton(
               title: _speakerOn ? 'speaker off' : 'speaker on',
-              icon: _speakerOn ? Icons.volume_off : Icons.volume_up,
+              icon: _speakerOn ? Icons.volume_up : Icons.volume_down,
               checked: _speakerOn,
+              fillColor: _speakerOn ? Colors.blue : null,
               onPressed: () => _toggleSpeaker(),
             ));
             advanceActions2.add(ActionButton(

@@ -132,7 +132,7 @@ class _MyRegisterWidget extends State<RegisterWidget>
 
     _saveSettings();
 
-       currentUser.register(SipUser(
+    currentUser.register(SipUser(
         selectedTransport: _selectedTransport,
         wsExtraHeaders: _wsExtraHeaders,
         sipUri: _sipUriController.text,
@@ -143,179 +143,263 @@ class _MyRegisterWidget extends State<RegisterWidget>
         authUser: _authorizationUserController.text));
   }
 
+  void _disconnect() {
+    currentUser.disconnect();
+  }
+
   @override
   Widget build(BuildContext context) {
-    Color? textColor = Theme.of(context).textTheme.bodyMedium?.color;
-    Color? textFieldFill =
-        Theme.of(context).buttonTheme.colorScheme?.surfaceContainerLowest;
+    final theme = Theme.of(context);
     currentUser = context.watch<SipUserCubit>();
 
-    OutlineInputBorder border = OutlineInputBorder(
-      borderSide: BorderSide.none,
-      borderRadius: BorderRadius.circular(5),
-    );
-    Color? textLabelColor =
-        Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.5);
     return Scaffold(
       appBar: AppBar(
-        title: Text("SIP Account"),
+        title: Text(
+          "Account Settings",
+          style: theme.textTheme.headlineMedium,
+        ),
+        centerTitle: true,
       ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: SizedBox(
-                    height: 40,
-                    child: ElevatedButton(
-                      child: Text('Register'),
-                      onPressed: () => _register(context),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_registerState.state == RegistrationStateEnum.REGISTERED) ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
+                    child: Text('Disconnect'),
+                    onPressed: _disconnect,
+                  ),
+                ),
+              ] else ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                    child: Text('Register'),
+                    onPressed: () => _register(context),
                   ),
                 ),
               ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-        children: <Widget>[
-          Center(
-            child: Text(
-              'Register Status: ${_registerState.state?.name ?? ''}',
-              style: TextStyle(fontSize: 18, color: textColor),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Card(
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                width: double.infinity,
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          _registerState.state == RegistrationStateEnum.REGISTERED
+                              ? Icons.check_circle
+                              : _registerState.state == RegistrationStateEnum.REGISTRATION_FAILED
+                                  ? Icons.error
+                                  : Icons.pending,
+                          color: _registerState.state == RegistrationStateEnum.REGISTERED
+                              ? Colors.green
+                              : _registerState.state == RegistrationStateEnum.REGISTRATION_FAILED
+                                  ? Colors.red
+                                  : Colors.orange,
+                          size: 24,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Status: ${_registerState.state?.name ?? 'Unknown'}',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_registerState.state == RegistrationStateEnum.REGISTERED) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Registration successful! Your account will auto-reconnect on restart.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.green,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                    if (_registerState.state == RegistrationStateEnum.REGISTRATION_FAILED) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Registration failed. Please check your settings and try again.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.red,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             ),
-          ),
-          SizedBox(height: 15),
-          if (_selectedTransport == TransportType.WS) ...[
-            Text('WebSocket URL', style: TextStyle(color: textLabelColor)),
-            SizedBox(height: 5),
+            const SizedBox(height: 24),
+            if (!kIsWeb) ...[
+              Text(
+                'Connection Type',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: RadioListTile<TransportType>(
+                      value: TransportType.TCP,
+                      groupValue: _selectedTransport,
+                      onChanged: (value) => setState(() {
+                        _selectedTransport = value!;
+                      }),
+                      title: Text('TCP'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  Expanded(
+                    child: RadioListTile<TransportType>(
+                      value: TransportType.WS,
+                      groupValue: _selectedTransport,
+                      onChanged: (value) => setState(() {
+                        _selectedTransport = value!;
+                      }),
+                      title: Text('WebSocket'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+            ],
+            if (_selectedTransport == TransportType.WS) ...[
+              Text(
+                'WebSocket URL',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _wsUriController,
+                keyboardType: TextInputType.url,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  hintText: 'wss://your-server.com:port/path',
+                  prefixIcon: Icon(Icons.link),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+            if (_selectedTransport == TransportType.TCP) ...[
+              Text(
+                'Port',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _portController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  hintText: '5060',
+                  prefixIcon: Icon(Icons.settings_ethernet),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+            Text(
+              'SIP URI',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
             TextFormField(
-              controller: _wsUriController,
+              controller: _sipUriController,
+              keyboardType: TextInputType.emailAddress,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                hintText: 'username@domain.com',
+                prefixIcon: Icon(Icons.alternate_email),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Authorization User',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextFormField(
+              controller: _authorizationUserController,
               keyboardType: TextInputType.text,
               autocorrect: false,
-              textAlign: TextAlign.center,
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: textFieldFill,
-                border: border,
-                enabledBorder: border,
-                focusedBorder: border,
-                hintText: 'wss://your-server.com:port/path',
+              decoration: const InputDecoration(
+                hintText: 'Optional: Different username for auth',
+                prefixIcon: Icon(Icons.person),
               ),
             ),
-          ],
-          if (_selectedTransport == TransportType.TCP) ...[
-            Text('Port', style: TextStyle(color: textLabelColor)),
-            SizedBox(height: 5),
+            const SizedBox(height: 16),
+            Text(
+              'Password',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
             TextFormField(
-              controller: _portController,
+              controller: _passwordController,
               keyboardType: TextInputType.text,
-              textAlign: TextAlign.center,
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: textFieldFill,
-                border: border,
-                enabledBorder: border,
-                focusedBorder: border,
+              autocorrect: false,
+              obscureText: true,
+              decoration: const InputDecoration(
+                hintText: 'Enter your password',
+                prefixIcon: Icon(Icons.lock),
               ),
             ),
+            const SizedBox(height: 16),
+            Text(
+              'Display Name',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextFormField(
+              controller: _displayNameController,
+              keyboardType: TextInputType.text,
+              decoration: const InputDecoration(
+                hintText: 'Your display name',
+                prefixIcon: Icon(Icons.badge),
+              ),
+            ),
+            const SizedBox(height: 100),
           ],
-          SizedBox(height: 15),
-          Text('SIP URI', style: TextStyle(color: textLabelColor)),
-          SizedBox(height: 5),
-          TextFormField(
-            controller: _sipUriController,
-            keyboardType: TextInputType.text,
-            autocorrect: false,
-            textAlign: TextAlign.center,
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: textFieldFill,
-              border: border,
-              enabledBorder: border,
-              focusedBorder: border,
-              hintText: 'username@domain.com (without sip:)',
-            ),
-          ),
-          SizedBox(height: 15),
-          Text('Authorization User', style: TextStyle(color: textLabelColor)),
-          SizedBox(height: 5),
-          TextFormField(
-            controller: _authorizationUserController,
-            keyboardType: TextInputType.text,
-            autocorrect: false,
-            textAlign: TextAlign.center,
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: textFieldFill,
-              border: border,
-              enabledBorder: border,
-              focusedBorder: border,
-              hintText:
-                  _authorizationUserController.text.isEmpty ? '[Empty]' : null,
-            ),
-          ),
-          SizedBox(height: 15),
-          Text('Password', style: TextStyle(color: textLabelColor)),
-          SizedBox(height: 5),
-          TextFormField(
-            controller: _passwordController,
-            keyboardType: TextInputType.text,
-            autocorrect: false,
-            textAlign: TextAlign.center,
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: textFieldFill,
-              border: border,
-              enabledBorder: border,
-              focusedBorder: border,
-              hintText: _passwordController.text.isEmpty ? '[Empty]' : null,
-            ),
-          ),
-          SizedBox(height: 15),
-          Text('Display Name', style: TextStyle(color: textLabelColor)),
-          SizedBox(height: 5),
-          TextFormField(
-            controller: _displayNameController,
-            keyboardType: TextInputType.text,
-            textAlign: TextAlign.center,
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: textFieldFill,
-              border: border,
-              enabledBorder: border,
-              focusedBorder: border,
-              hintText: _displayNameController.text.isEmpty ? '[Empty]' : null,
-            ),
-          ),
-          const SizedBox(height: 20),
-          if (!kIsWeb) ...[
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                RadioMenuButton<TransportType>(
-                    value: TransportType.TCP,
-                    groupValue: _selectedTransport,
-                    onChanged: ((value) => setState(() {
-                          _selectedTransport = value!;
-                        })),
-                    child: Text("TCP")),
-                RadioMenuButton<TransportType>(
-                    value: TransportType.WS,
-                    groupValue: _selectedTransport,
-                    onChanged: ((value) => setState(() {
-                          _selectedTransport = value!;
-                        })),
-                    child: Text("WS")),
-              ],
-            ),
-          ],
-        ],
+        ),
       ),
     );
   }

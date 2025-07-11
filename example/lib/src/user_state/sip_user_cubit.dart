@@ -1,11 +1,17 @@
 import 'package:bloc/bloc.dart';
 import 'package:dart_sip_ua_example/src/user_state/sip_user.dart';
-import 'package:logger/logger.dart';
+import 'package:dart_sip_ua_example/src/background_service.dart';
 import 'package:sip_ua/sip_ua.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-class SipUserCubit extends Cubit<SipUser?> {
+class SipUserCubit extends Cubit<SipUser?> implements SipUaHelperListener {
   final SIPUAHelper sipHelper;
-  SipUserCubit({required this.sipHelper}) : super(null);
+  bool _isRegistered = false;
+  
+  SipUserCubit({required this.sipHelper}) : super(null) {
+    sipHelper.addSipUaHelperListener(this);
+    _loadSavedUser();
+  }
 
   void register(SipUser user) {
     UaSettings settings = UaSettings();
@@ -92,6 +98,108 @@ class SipUserCubit extends Cubit<SipUser?> {
     
     emit(user);
     sipHelper.start(settings);
+  }
+
+  Future<void> _loadSavedUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedUserJson = prefs.getString('registered_sip_user');
+    final isRegistered = prefs.getBool('is_registered') ?? false;
+    
+    if (savedUserJson != null && isRegistered) {
+      try {
+        final sipUser = SipUser.fromJsonString(savedUserJson);
+        emit(sipUser);
+        // Auto-reconnect if was previously registered
+        print('Auto-reconnecting to SIP server...');
+        register(sipUser);
+      } catch (e) {
+        print('Error loading saved user: $e');
+        await _clearSavedUser();
+      }
+    }
+  }
+
+  Future<void> _saveUser(SipUser user) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('registered_sip_user', user.toJsonString());
+  }
+
+  Future<void> _markAsRegistered() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('is_registered', true);
+    _isRegistered = true;
+  }
+
+  Future<void> _clearSavedUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('registered_sip_user');
+    await prefs.setBool('is_registered', false);
+    _isRegistered = false;
+  }
+
+  Future<void> disconnect() async {
+    if (state != null) {
+      sipHelper.stop();
+      await _clearSavedUser();
+      // Stop background service when manually disconnecting
+      BackgroundService.stopService();
+      emit(null);
+      print('Disconnected and cleared saved registration');
+    }
+  }
+
+  bool get isRegistered => _isRegistered;
+
+  @override
+  void registrationStateChanged(RegistrationState state) {
+    print('SipUserCubit: Registration state changed to ${state.state}');
+    
+    if (state.state == RegistrationStateEnum.REGISTERED) {
+      if (this.state != null) {
+        _markAsRegistered();
+        _saveUser(this.state!);
+        // Start background service when successfully registered
+        BackgroundService.startService();
+        print('Registration successful - saved user data and started background service');
+      }
+    } else if (state.state == RegistrationStateEnum.UNREGISTERED ||
+               state.state == RegistrationStateEnum.REGISTRATION_FAILED) {
+      _clearSavedUser();
+      // Stop background service when unregistered
+      BackgroundService.stopService();
+      print('Registration failed/unregistered - cleared saved data and stopped background service');
+    }
+  }
+
+  @override
+  void callStateChanged(Call call, CallState state) {
+    // No-op for now
+  }
+
+  @override
+  void transportStateChanged(TransportState state) {
+    // No-op for now
+  }
+
+  @override
+  void onNewMessage(SIPMessageRequest msg) {
+    // No-op for now
+  }
+
+  @override
+  void onNewNotify(Notify ntf) {
+    // No-op for now
+  }
+
+  @override
+  void onNewReinvite(ReInvite event) {
+    // No-op for now
+  }
+
+  @override
+  Future<void> close() {
+    sipHelper.removeSipUaHelperListener(this);
+    return super.close();
   }
 
   // void register(SipUser user) {

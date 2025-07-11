@@ -1,4 +1,5 @@
 // ignore_for_file: public_member_api_docs, sort_constructors_first
+import 'dart:convert';
 import 'package:sip_ua/sip_ua.dart';
 
 class SipUser {
@@ -71,4 +72,37 @@ class SipUser {
       wsExtraHeaders: wsExtraHeaders ?? this.wsExtraHeaders,
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'port': port,
+      'displayName': displayName,
+      'wsUrl': wsUrl,
+      'sipUri': sipUri,
+      'password': password,
+      'authUser': authUser,
+      'selectedTransport': selectedTransport.index,
+      'wsExtraHeaders': wsExtraHeaders,
+    };
+  }
+
+  factory SipUser.fromJson(Map<String, dynamic> json) {
+    return SipUser(
+      port: json['port'] ?? '',
+      displayName: json['displayName'] ?? '',
+      wsUrl: json['wsUrl'],
+      sipUri: json['sipUri'],
+      password: json['password'] ?? '',
+      authUser: json['authUser'] ?? '',
+      selectedTransport: TransportType.values[json['selectedTransport'] ?? 0],
+      wsExtraHeaders: json['wsExtraHeaders'] != null 
+        ? Map<String, String>.from(json['wsExtraHeaders'])
+        : null,
+    );
+  }
+
+  String toJsonString() => jsonEncode(toJson());
+  
+  factory SipUser.fromJsonString(String jsonString) => 
+    SipUser.fromJson(jsonDecode(jsonString));
 }
