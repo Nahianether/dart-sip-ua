@@ -13,6 +13,7 @@ import 'src/callscreen.dart';
 import 'src/dialpad.dart';
 import 'src/register.dart';
 import 'src/debug_screen.dart';
+import 'src/recent_calls.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -229,6 +230,7 @@ class MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
     '/callscreen': ([SIPUAHelper? helper, Object? arguments]) => CallScreenWidget(helper, arguments as Call?),
     '/about': ([SIPUAHelper? helper, Object? arguments]) => AboutWidget(),
     '/debug': ([SIPUAHelper? helper, Object? arguments]) => DebugScreen(),
+    '/recent': ([SIPUAHelper? helper, Object? arguments]) => RecentCallsScreen(),
   };
 
   Route<dynamic>? _onGenerateRoute(RouteSettings settings) {

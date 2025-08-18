@@ -33,6 +33,7 @@ dependencies:
   flutter_local_notifications: ^18.0.1
   flutter_contacts: ^1.1.9
   connectivity_plus: ^6.0.5
+  proximity_sensor: ^1.0.2
 
 dev_dependencies:
   flutter_test:

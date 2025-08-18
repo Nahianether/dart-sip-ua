@@ -11,6 +11,7 @@ import 'package:flutter_contacts/flutter_contacts.dart';
 
 import 'widgets/action_button.dart';
 import 'permission_helper.dart';
+import 'recent_calls.dart';
 
 class DialPadWidget extends ConsumerStatefulWidget {
   final SIPUAHelper? _helper;
@@ -49,6 +50,9 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
 
   Future<Widget?> _handleCall(BuildContext context,
       [bool voiceOnly = false]) async {
+    // Hide keyboard when starting a call
+    FocusScope.of(context).unfocus();
+    
     // Skip permission_handler plugin and go straight to WebRTC native API
     // This will trigger iOS permission if needed, and work if already granted
     print('🚀 Starting call - bypassing permission_handler plugin');
@@ -132,10 +136,20 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     helper!.call(dest, voiceOnly: voiceOnly, mediaStream: mediaStream);
     _preferences.setString('dest', dest);
     ref.read(destinationProvider.notifier).state = dest;
+    
+    // Add to call history
+    await CallHistoryManager.addCall(
+      number: dest,
+      type: CallType.outgoing,
+    );
+    
     return null;
   }
 
   void _handleBackSpace([bool deleteAll = false]) {
+    // Hide keyboard when using backspace
+    FocusScope.of(context).unfocus();
+    
     final textController = ref.read(textControllerProvider);
     var text = textController.text;
     if (text.isNotEmpty) {
@@ -146,6 +160,9 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
   }
 
   void _handleNum(String number) {
+    // Hide keyboard when using custom number pad
+    FocusScope.of(context).unfocus();
+    
     final textController = ref.read(textControllerProvider);
     textController.text += number;
     ref.read(destinationProvider.notifier).state = textController.text;
@@ -191,53 +208,168 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
         .toList();
   }
 
+  /// Sanitize phone number for SIP calling
+  String _sanitizePhoneNumber(String phoneNumber) {
+    // Remove all non-digit characters except +
+    String cleaned = phoneNumber.replaceAll(RegExp(r'[^\d+]'), '');
+    
+    print('📞 Original number: $phoneNumber');
+    print('📞 Cleaned number: $cleaned');
+    
+    // Store original for fallback
+    final originalCleaned = cleaned;
+    
+    // Remove country codes that might interfere with SIP calling
+    // But ensure we preserve the local mobile number format
+    if (cleaned.startsWith('+880')) {
+      // Bangladesh country code +880 - extract local number
+      final localPart = cleaned.substring(4);
+      // Ensure local number starts with proper mobile prefix
+      if (localPart.length >= 10 && localPart.startsWith('1')) {
+        // Mobile number like +8801712345678 -> 01712345678
+        cleaned = '0' + localPart;
+        print('📞 Bangladesh mobile (+880): $cleaned');
+      } else {
+        cleaned = localPart;
+        print('📞 Bangladesh other (+880): $cleaned');
+      }
+    } else if (cleaned.startsWith('+88')) {
+      // Malformed +88 prefix - extract what follows
+      final localPart = cleaned.substring(3);
+      if (localPart.length >= 10 && localPart.startsWith('01')) {
+        // Already has 01 prefix
+        cleaned = localPart;
+        print('📞 Corrected +88 with 01 prefix: $cleaned');
+      } else if (localPart.length >= 9 && localPart.startsWith('1')) {
+        // Missing leading 0
+        cleaned = '0' + localPart;
+        print('📞 Corrected +88 added leading 0: $cleaned');
+      } else {
+        cleaned = localPart;
+        print('📞 Corrected +88 other: $cleaned');
+      }
+    } else if (cleaned.startsWith('880')) {
+      // Bangladesh without + sign - extract local part
+      final localPart = cleaned.substring(3);
+      if (localPart.length >= 10 && localPart.startsWith('1')) {
+        cleaned = '0' + localPart;
+        print('📞 Bangladesh (880) added leading 0: $cleaned');
+      } else {
+        cleaned = localPart;
+        print('📞 Bangladesh (880): $cleaned');
+      }
+    } else if (cleaned.startsWith('88') && cleaned.length > 11) {
+      // Potential malformed 88 prefix (only if number is very long)
+      final localPart = cleaned.substring(2);
+      if (localPart.length >= 10 && localPart.startsWith('01')) {
+        cleaned = localPart;
+        print('📞 Removed 88, preserved 01: $cleaned');
+      } else if (localPart.length >= 9 && localPart.startsWith('1')) {
+        cleaned = '0' + localPart;
+        print('📞 Removed 88, added leading 0: $cleaned');
+      } else {
+        // Keep original if unsure
+        cleaned = originalCleaned;
+        print('📞 Kept original (88 ambiguous): $cleaned');
+      }
+    } else if (cleaned.startsWith('+1')) {
+      // US/Canada country code
+      cleaned = cleaned.substring(2);
+      print('📞 Removed +1 prefix: $cleaned');
+    } else if (cleaned.startsWith('+')) {
+      // Remove any other country code (+ followed by 1-3 digits)
+      final match = RegExp(r'^\+\d{1,3}').firstMatch(cleaned);
+      if (match != null) {
+        cleaned = cleaned.substring(match.end);
+        print('📞 Removed country code: $cleaned');
+      }
+    }
+    
+    // Final validation - ensure we have a reasonable number
+    if (cleaned.length < 6) {
+      print('⚠️ Number too short after cleaning: $cleaned, reverting to original');
+      return originalCleaned.replaceAll('+', ''); // Remove only the + sign
+    }
+    
+    // Ensure mobile numbers have proper format
+    if (cleaned.length >= 10 && cleaned.startsWith('1') && !cleaned.startsWith('01')) {
+      // Looks like a mobile number missing leading 0
+      cleaned = '0' + cleaned;
+      print('📞 Added missing leading 0: $cleaned');
+    }
+    
+    print('📞 Final sanitized number: $cleaned');
+    return cleaned;
+  }
+
   Future<void> _pickContact() async {
+    // Hide keyboard when picking contact
+    FocusScope.of(context).unfocus();
+    
+    print('📱 Attempting to pick contact...');
+    
     try {
-      // Check current permission status
-      final permissionStatus = await Permission.contacts.status;
+      // Bypass permission_handler and go directly to FlutterContacts
+      // This will trigger native iOS contact permission if needed
+      final contact = await FlutterContacts.openExternalPick();
       
-      if (permissionStatus.isGranted) {
-        final contact = await FlutterContacts.openExternalPick();
-        if (contact != null) {
-          if (contact.phones.isNotEmpty) {
-            final phoneNumber = contact.phones.first.number;
-            final textController = ref.read(textControllerProvider);
-            textController.text = phoneNumber;
-            ref.read(destinationProvider.notifier).state = phoneNumber;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Contact added: ${contact.displayName}'),
-                duration: Duration(seconds: 2),
-              ),
-            );
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Selected contact has no phone number'),
-                duration: Duration(seconds: 2),
-              ),
-            );
-          }
-        }
-      } else if (permissionStatus.isDenied) {
-        // Try to request permission again
-        final newStatus = await Permission.contacts.request();
-        if (newStatus.isGranted) {
-          _pickContact(); // Retry after permission granted
+      if (contact != null) {
+        print('✅ Contact selected: ${contact.displayName}');
+        
+        if (contact.phones.isNotEmpty) {
+          final rawPhoneNumber = contact.phones.first.number;
+          final sanitizedNumber = _sanitizePhoneNumber(rawPhoneNumber);
+          
+          final textController = ref.read(textControllerProvider);
+          textController.text = sanitizedNumber;
+          ref.read(destinationProvider.notifier).state = sanitizedNumber;
+          
+          print('📞 Phone number added: $sanitizedNumber (was: $rawPhoneNumber)');
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Contact added: ${contact.displayName} ($sanitizedNumber)'),
+              duration: Duration(seconds: 2),
+              backgroundColor: Colors.green,
+            ),
+          );
         } else {
-          _showPermissionDialog();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Selected contact has no phone number'),
+              duration: Duration(seconds: 2),
+              backgroundColor: Colors.orange,
+            ),
+          );
         }
-      } else if (permissionStatus.isPermanentlyDenied) {
-        _showPermissionDialog();
+      } else {
+        print('ℹ️ Contact picker was canceled');
       }
     } catch (e) {
-      print('Error picking contact: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error accessing contacts. Please try again.'),
-          duration: Duration(seconds: 3),
-        ),
-      );
+      print('❌ Error picking contact: $e');
+      
+      // If this is a permission error, show helpful message
+      if (e.toString().contains('denied') || e.toString().contains('permission')) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Contacts permission required. Please enable in Settings.'),
+            duration: Duration(seconds: 4),
+            backgroundColor: Theme.of(context).colorScheme.error,
+            action: SnackBarAction(
+              label: 'Open Settings',
+              onPressed: () => openAppSettings(),
+            ),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error accessing contacts: ${e.toString()}'),
+            duration: Duration(seconds: 3),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
     }
   }
 
@@ -570,17 +702,28 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
             ),
             const SizedBox(height: 8),
             TextField(
-              keyboardType: TextInputType.text,
+              keyboardType: TextInputType.phone,
               textAlign: TextAlign.center,
+              textInputAction: TextInputAction.done,
               style: theme.textTheme.bodyLarge?.copyWith(
                 fontWeight: FontWeight.w500,
               ),
               maxLines: 2,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 hintText: 'Enter SIP URI or number',
-                suffixIcon: Icon(Icons.dialpad),
+                suffixIcon: GestureDetector(
+                  onTap: () {
+                    // Hide keyboard when dialpad icon is tapped
+                    FocusScope.of(context).unfocus();
+                  },
+                  child: const Icon(Icons.dialpad),
+                ),
               ),
               controller: textController,
+              onSubmitted: (value) {
+                // Hide keyboard when done is pressed
+                FocusScope.of(context).unfocus();
+              },
             ),
           ],
         ),
@@ -633,7 +776,13 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     final receivedMsg = ref.watch(receivedMessageProvider);
     final themeNotifier = ref.watch(themeNotifierProvider);
 
-    return Scaffold(
+    return GestureDetector(
+      onTap: () {
+        // Hide keyboard when tapping anywhere on screen
+        FocusScope.of(context).unfocus();
+      },
+      behavior: HitTestBehavior.translucent,
+      child: Scaffold(
       appBar: AppBar(
         title: Text(
           "SIP Phone",
@@ -644,6 +793,8 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
           IconButton(
             icon: Icon(Icons.more_vert),
             onPressed: () {
+              // Hide keyboard when opening menu
+              FocusScope.of(context).unfocus();
               showModalBottomSheet(
                 context: context,
                 shape: const RoundedRectangleBorder(
@@ -700,6 +851,20 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
                           _forceRequestPermissions();
                         },
                       ),
+                      ListTile(
+                        leading: Icon(Icons.history),
+                        title: Text('Recent Calls'),
+                        onTap: () async {
+                          Navigator.pop(context);
+                          final result = await Navigator.pushNamed(context, '/recent');
+                          if (result != null && result is String) {
+                            // User selected a number from recent calls
+                            final textController = ref.read(textControllerProvider);
+                            textController.text = result;
+                            ref.read(destinationProvider.notifier).state = result;
+                          }
+                        },
+                      ),
                     ],
                   ),
                 ),
@@ -708,7 +873,12 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
           ),
         ],
       ),
-      body: Column(
+      body: Listener(
+        onPointerDown: (_) {
+          // Hide keyboard on any touch event
+          FocusScope.of(context).unfocus();
+        },
+        child: Column(
         children: [
           Container(
             padding: const EdgeInsets.all(20),
@@ -816,7 +986,9 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
             ),
           ),
         ],
+        ), // Close Listener
       ),
+      ), // Close GestureDetector
     );
   }
 

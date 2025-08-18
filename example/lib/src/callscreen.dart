@@ -4,8 +4,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:sip_ua/sip_ua.dart';
+import 'package:proximity_sensor/proximity_sensor.dart';
+import 'package:flutter/services.dart';
 
 import 'widgets/action_button.dart';
+import 'recent_calls.dart';
 
 class CallScreenWidget extends StatefulWidget {
   final SIPUAHelper? _helper;
@@ -37,6 +40,10 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   Originator? _holdOriginator;
   bool _callConfirmed = false;
   CallStateEnum _state = CallStateEnum.NONE;
+  int _callStartTime = 0;
+  StreamSubscription<int>? _proximitySubscription;
+  bool _isProximitySensorEnabled = false;
+  bool _isNavigatingBack = false;
 
   late String _transferTarget;
   late Timer _timer;
@@ -56,12 +63,15 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
     super.initState();
     _initRenderers();
     helper!.addSipUaHelperListener(this);
-    _startTimer();
+    _initProximitySensor();
+    // Don't start timer immediately - wait for call to be answered
   }
 
   @override
   deactivate() {
     super.deactivate();
+    
+    print('🔄 CallScreen deactivating...');
     
     try {
       helper!.removeSipUaHelperListener(this);
@@ -76,12 +86,56 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
     }
     
     try {
+      _proximitySubscription?.cancel();
+      _proximitySubscription = null;
+      // Restore normal screen behavior
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: SystemUiOverlay.values);
+      print('✅ Proximity sensor cleaned up');
+    } catch (e) {
+      print('Error cleaning up proximity sensor: $e');
+    }
+    
+    try {
       _disposeRenderers();
     } catch (e) {
       print('Error disposing renderers: $e');
     }
     
     _cleanUp();
+    print('✅ CallScreen deactivation complete');
+  }
+
+  void _initProximitySensor() {
+    if (!kIsWeb && (defaultTargetPlatform == TargetPlatform.iOS || defaultTargetPlatform == TargetPlatform.android)) {
+      try {
+        print('🔍 Initializing proximity sensor...');
+        _proximitySubscription = ProximitySensor.events.listen((int proximityValue) {
+          // proximityValue: 0 = near (close to ear), 1 = far (away from ear)
+          final isNear = proximityValue == 0;
+          print('📱 Proximity sensor: ${isNear ? 'NEAR (screen off)' : 'FAR (screen on)'}');
+          
+          if (mounted && _callConfirmed) { // Only control screen during active call
+            setState(() {
+              _isProximitySensorEnabled = isNear;
+            });
+            
+            // Control screen visibility based on proximity
+            if (isNear) {
+              // Hide UI when phone is near ear
+              SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+            } else {
+              // Show UI when phone is away from ear
+              SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: SystemUiOverlay.values);
+            }
+          }
+        });
+        print('✅ Proximity sensor initialized');
+      } catch (e) {
+        print('❌ Error initializing proximity sensor: $e');
+      }
+    } else {
+      print('⚠️ Proximity sensor not supported on this platform');
+    }
   }
 
   void _startTimer() {
@@ -169,6 +223,28 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
         break;
       case CallStateEnum.ENDED:
       case CallStateEnum.FAILED:
+        // Add call completion to history with duration
+        final callDuration = _callConfirmed && _callStartTime > 0
+            ? (DateTime.now().millisecondsSinceEpoch ~/ 1000) - _callStartTime
+            : 0;
+        
+        if (callState.state == CallStateEnum.FAILED) {
+          // Failed call
+          CallHistoryManager.addCall(
+            number: remoteIdentity ?? 'Unknown',
+            type: CallType.failed,
+            duration: callDuration,
+          );
+        } else if (!_callConfirmed && direction == Direction.incoming) {
+          // Missed incoming call
+          CallHistoryManager.addCall(
+            number: remoteIdentity ?? 'Unknown',
+            type: CallType.missed,
+          );
+        }
+        // Note: Outgoing calls are already tracked when initiated
+        // Incoming calls are tracked when confirmed
+        
         _backToDialPad();
         break;
       case CallStateEnum.UNMUTED:
@@ -176,8 +252,22 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
       case CallStateEnum.CONNECTING:
       case CallStateEnum.PROGRESS:
       case CallStateEnum.ACCEPTED:
+        break;
       case CallStateEnum.CONFIRMED:
-        setState(() => _callConfirmed = true);
+        if (!_callConfirmed) {
+          print('📞 Call confirmed - starting timer');
+          setState(() => _callConfirmed = true);
+          _callStartTime = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+          _startTimer(); // Start timer only when call is actually answered
+          
+          // Add incoming call to history if this is an incoming call
+          if (direction == Direction.incoming) {
+            CallHistoryManager.addCall(
+              number: remoteIdentity ?? 'Unknown',
+              type: CallType.incoming,
+            );
+          }
+        }
         break;
       case CallStateEnum.HOLD:
       case CallStateEnum.UNHOLD:
@@ -219,6 +309,14 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   }
 
   void _backToDialPad() {
+    if (_isNavigatingBack) {
+      print('🚫 Already navigating back, skipping duplicate call');
+      return;
+    }
+    
+    print('🔙 Starting navigation back to dialpad...');
+    _isNavigatingBack = true;
+    
     try {
       _timer.cancel();
     } catch (e) {
@@ -227,13 +325,26 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
     
     _cleanUp();
     
-    Timer(Duration(seconds: 2), () {
+    // Shorter delay for better UX
+    Timer(Duration(milliseconds: 800), () {
       try {
-        if (mounted) {
+        if (mounted && _isNavigatingBack) {
+          print('🔙 Executing navigation back to dialpad');
           Navigator.of(context).pop();
+          print('✅ Successfully navigated back');
+        } else {
+          print('⚠️ Skipping navigation: mounted=$mounted, navigating=$_isNavigatingBack');
         }
       } catch (e) {
-        print('Error navigating back: $e');
+        print('❌ Error navigating back: $e');
+        // Try to force navigation if regular pop fails
+        try {
+          if (mounted) {
+            Navigator.of(context).popUntil((route) => route.isFirst);
+          }
+        } catch (e2) {
+          print('❌ Emergency navigation also failed: $e2');
+        }
       }
     });
   }
@@ -277,17 +388,51 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   }
 
   void _handleHangup() {
+    print('📞 Hanging up call...');
+    
+    // Cancel timer first
     try {
-      call!.hangup({'status_code': 603});
+      if (_timer.isActive) {
+        _timer.cancel();
+        print('✅ Timer canceled');
+      }
     } catch (e) {
-      print('Error during hangup: $e');
+      print('❌ Error canceling timer: $e');
     }
     
+    // Stop media streams before hanging up
     try {
-      _timer.cancel();
+      if (_localStream != null) {
+        _localStream!.getTracks().forEach((track) {
+          track.stop();
+        });
+        _localStream = null;
+        print('✅ Local stream stopped');
+      }
+      
+      if (_remoteStream != null) {
+        _remoteStream!.getTracks().forEach((track) {
+          track.stop();
+        });
+        _remoteStream = null;
+        print('✅ Remote stream stopped');
+      }
     } catch (e) {
-      print('Error canceling timer: $e');
+      print('❌ Error stopping streams: $e');
     }
+    
+    // Hangup the call
+    try {
+      if (call != null) {
+        call!.hangup({'status_code': 603});
+        print('✅ Call hangup request sent');
+      }
+    } catch (e) {
+      print('❌ Error during hangup: $e');
+    }
+    
+    // Let the call state change handler manage navigation back
+    print('📞 Hangup initiated - waiting for call state change to handle navigation');
   }
 
   void _handleAccept() async {
@@ -335,10 +480,41 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   }
 
   void _muteAudio() {
-    if (_audioMuted) {
-      call!.unmute(true, false);
-    } else {
-      call!.mute(true, false);
+    print('🎤 Toggling mute: ${_audioMuted ? 'UNMUTING' : 'MUTING'}');
+    
+    try {
+      if (_audioMuted) {
+        // Unmute
+        call!.unmute(true, false);
+        setState(() {
+          _audioMuted = false;
+        });
+        
+        // Also enable audio tracks directly
+        if (_localStream != null) {
+          for (final track in _localStream!.getAudioTracks()) {
+            track.enabled = true;
+            print('✅ Enabled audio track: ${track.id}');
+          }
+        }
+      } else {
+        // Mute
+        call!.mute(true, false);
+        setState(() {
+          _audioMuted = true;
+        });
+        
+        // Also disable audio tracks directly
+        if (_localStream != null) {
+          for (final track in _localStream!.getAudioTracks()) {
+            track.enabled = false;
+            print('✅ Disabled audio track: ${track.id}');
+          }
+        }
+      }
+      print('🎤 Mute state changed to: ${_audioMuted ? 'MUTED' : 'UNMUTED'}');
+    } catch (e) {
+      print('❌ Error toggling mute: $e');
     }
   }
 
@@ -429,25 +605,39 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
       _speakerOn = !_speakerOn;
     });
     
-    if (_localStream != null && _localStream!.getAudioTracks().isNotEmpty) {
+    print('🔊 Toggling speaker: ${_speakerOn ? 'ON' : 'OFF'}');
+    
+    // Enable speaker on all available audio tracks
+    final audioTracks = <MediaStreamTrack>[];
+    
+    // Collect all audio tracks
+    if (_localStream != null) {
+      audioTracks.addAll(_localStream!.getAudioTracks());
+    }
+    if (_remoteStream != null) {
+      audioTracks.addAll(_remoteStream!.getAudioTracks());
+    }
+    
+    // Apply speaker setting to all audio tracks
+    for (final track in audioTracks) {
       try {
         if (!kIsWeb && !WebRTC.platformIsDesktop) {
-          _localStream!.getAudioTracks()[0].enableSpeakerphone(_speakerOn);
+          track.enableSpeakerphone(_speakerOn);
+          print('✅ Applied speaker setting to track: ${track.id}');
         }
-        print('Speaker ${_speakerOn ? 'enabled' : 'disabled'}');
       } catch (e) {
-        print('Error toggling speaker: $e');
+        print('❌ Error toggling speaker on track ${track.id}: $e');
       }
     }
     
-    // Also try to toggle speaker on remote stream if available
-    if (_remoteStream != null && _remoteStream!.getAudioTracks().isNotEmpty) {
+    // Additional iOS-specific audio session management
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
       try {
-        if (!kIsWeb && !WebRTC.platformIsDesktop) {
-          _remoteStream!.getAudioTracks()[0].enableSpeakerphone(_speakerOn);
-        }
+        // Use WebRTC's native audio session management
+        Helper.setSpeakerphoneOn(_speakerOn);
+        print('✅ iOS speaker setting applied via Helper.setSpeakerphoneOn');
       } catch (e) {
-        print('Error toggling speaker on remote stream: $e');
+        print('❌ Error with Helper.setSpeakerphoneOn: $e');
       }
     }
   }

@@ -16,6 +16,8 @@ PODS:
     - FlutterMacOS
   - permission_handler_apple (9.3.0):
     - Flutter
+  - proximity_sensor (0.0.1):
+    - Flutter
   - shared_preferences_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
@@ -30,6 +32,7 @@ DEPENDENCIES:
   - flutter_webrtc (from `.symlinks/plugins/flutter_webrtc/ios`)
   - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
   - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
+  - proximity_sensor (from `.symlinks/plugins/proximity_sensor/ios`)
   - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
 
 SPEC REPOS:
@@ -53,6 +56,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/path_provider_foundation/darwin"
   permission_handler_apple:
     :path: ".symlinks/plugins/permission_handler_apple/ios"
+  proximity_sensor:
+    :path: ".symlinks/plugins/proximity_sensor/ios"
   shared_preferences_foundation:
     :path: ".symlinks/plugins/shared_preferences_foundation/darwin"
 
@@ -65,6 +70,7 @@ SPEC CHECKSUMS:
   flutter_webrtc: 90260f83024b1b96d239a575ea4e3708e79344d1
   path_provider_foundation: 2b6b4c569c0fb62ec74538f866245ac84301af46
   permission_handler_apple: 9878588469a2b0d0fc1e048d9f43605f92e6cec2
+  proximity_sensor: 87bc974f9d94b03b4b5911ff1f93a61e561e6183
   shared_preferences_foundation: fcdcbc04712aee1108ac7fda236f363274528f78
   WebRTC-SDK: 79942c006ea64f6fb48d7da8a4786dfc820bc1db
 
