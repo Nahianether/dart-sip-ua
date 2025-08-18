@@ -10,6 +10,7 @@ import 'package:sip_ua/sip_ua.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 
 import 'widgets/action_button.dart';
+import 'permission_helper.dart';
 
 class DialPadWidget extends ConsumerStatefulWidget {
   final SIPUAHelper? _helper;
@@ -48,13 +49,13 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
 
   Future<Widget?> _handleCall(BuildContext context,
       [bool voiceOnly = false]) async {
+    // Skip permission_handler plugin and go straight to WebRTC native API
+    // This will trigger iOS permission if needed, and work if already granted
+    print('🚀 Starting call - bypassing permission_handler plugin');
+    print('📞 Attempting direct media access for iOS compatibility');
+
     final textController = ref.read(textControllerProvider);
     final dest = textController.text;
-    if (defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.iOS) {
-      await Permission.microphone.request();
-      await Permission.camera.request();
-    }
     if (dest.isEmpty) {
       showDialog<void>(
         context: context,
@@ -91,21 +92,41 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
 
     MediaStream mediaStream;
 
-    if (kIsWeb && !voiceOnly) {
-      mediaStream =
-          await navigator.mediaDevices.getDisplayMedia(mediaConstraints);
-      mediaConstraints['video'] = false;
-      MediaStream userStream =
-          await navigator.mediaDevices.getUserMedia(mediaConstraints);
-      final audioTracks = userStream.getAudioTracks();
-      if (audioTracks.isNotEmpty) {
-        mediaStream.addTrack(audioTracks.first, addToNative: true);
+    try {
+      if (kIsWeb && !voiceOnly) {
+        mediaStream =
+            await navigator.mediaDevices.getDisplayMedia(mediaConstraints);
+        mediaConstraints['video'] = false;
+        MediaStream userStream =
+            await navigator.mediaDevices.getUserMedia(mediaConstraints);
+        final audioTracks = userStream.getAudioTracks();
+        if (audioTracks.isNotEmpty) {
+          mediaStream.addTrack(audioTracks.first, addToNative: true);
+        }
+      } else {
+        if (voiceOnly) {
+          mediaConstraints['video'] = !voiceOnly;
+        }
+        print('🔄 Requesting media access with constraints: $mediaConstraints');
+        mediaStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+        print('✅ Media stream obtained successfully');
       }
-    } else {
-      if (voiceOnly) {
-        mediaConstraints['video'] = !voiceOnly;
-      }
-      mediaStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+    } catch (e) {
+      print('❌ Media access error: $e');
+      
+      // Show user-friendly error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Unable to access microphone. Please check permissions in Settings.'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+          duration: Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'Open Settings',
+            onPressed: () => openAppSettings(),
+          ),
+        ),
+      );
+      return null;
     }
 
     helper!.call(dest, voiceOnly: voiceOnly, mediaStream: mediaStream);
@@ -325,6 +346,181 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     }
   }
 
+  Future<void> _forceRequestPermissions() async {
+    print('🔓 FORCING iOS PERMISSION REQUESTS...');
+    
+    try {
+      // Show explanatory dialog first
+      final shouldContinue = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.info),
+              SizedBox(width: 8),
+              Text('Permission Setup'),
+            ],
+          ),
+          content: Text(
+            'This will request essential permissions for SIP calls:\n\n'
+            '🎤 Microphone - Required for voice calls\n'
+            '📷 Camera - Required for video calls\n'
+            '📱 Contacts - Optional for contact integration\n\n'
+            'iOS will show permission dialogs. Please tap "Allow" to enable full functionality.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text('Continue'),
+            ),
+          ],
+        ),
+      ) ?? false;
+      
+      if (!shouldContinue) return;
+      
+      // Force request permissions sequentially with delays
+      print('🎤 Requesting microphone permission...');
+      
+      // Try to trigger native media access to force iOS permission prompt
+      MediaStream? audioStream;
+      try {
+        print('🔄 Attempting to access microphone via getUserMedia...');
+        audioStream = await navigator.mediaDevices.getUserMedia({
+          'audio': true,
+          'video': false,
+        });
+        print('✅ Native microphone access successful - keeping stream active for 3 seconds');
+        
+        // Keep the stream active for a few seconds to ensure iOS registers it
+        await Future.delayed(Duration(seconds: 3));
+        
+      } catch (e) {
+        print('⚠️ Native microphone access failed: $e');
+      } finally {
+        // Clean up the stream
+        audioStream?.getTracks().forEach((track) => track.stop());
+      }
+      
+      final micStatus = await Permission.microphone.request();
+      print('🎤 Microphone result: ${micStatus.name}');
+      
+      // Small delay between requests
+      await Future.delayed(Duration(milliseconds: 500));
+      
+      print('📷 Requesting camera permission...');
+      
+      // Try camera access
+      MediaStream? videoStream;
+      try {
+        print('🔄 Attempting to access camera via getUserMedia...');
+        videoStream = await navigator.mediaDevices.getUserMedia({
+          'audio': false,
+          'video': true,
+        });
+        print('✅ Native camera access successful - keeping stream active for 3 seconds');
+        
+        // Keep the stream active for a few seconds to ensure iOS registers it
+        await Future.delayed(Duration(seconds: 3));
+        
+      } catch (e) {
+        print('⚠️ Native camera access failed: $e');
+      } finally {
+        // Clean up the stream
+        videoStream?.getTracks().forEach((track) => track.stop());
+      }
+      
+      final camStatus = await Permission.camera.request();
+      print('📷 Camera result: ${camStatus.name}');
+      
+      await Future.delayed(Duration(milliseconds: 500));
+      
+      print('📱 Requesting contacts permission...');
+      final contactsStatus = await Permission.contacts.request();
+      print('📱 Contacts result: ${contactsStatus.name}');
+      
+      // Wait a bit for iOS to update system settings
+      await Future.delayed(Duration(milliseconds: 1000));
+      
+      // Show results
+      String resultInfo = 'Permission Results:\n\n';
+      resultInfo += '🎤 Microphone: ${_getStatusEmoji(micStatus)} ${micStatus.name}\n';
+      resultInfo += '📷 Camera: ${_getStatusEmoji(camStatus)} ${camStatus.name}\n';
+      resultInfo += '📱 Contacts: ${_getStatusEmoji(contactsStatus)} ${contactsStatus.name}\n\n';
+      
+      if (micStatus.isGranted) {
+        resultInfo += '✅ Essential permissions granted!\n\n';
+        resultInfo += 'Now check:\n';
+        resultInfo += '• Settings → Privacy & Security → Microphone\n';
+        resultInfo += '• Settings → Privacy & Security → Camera\n\n';
+        resultInfo += 'Your app should now appear in these lists.';
+      } else {
+        resultInfo += '❌ Microphone permission is required for calls.\n\n';
+        resultInfo += 'To enable manually:\n';
+        resultInfo += '1. Go to Settings → Privacy & Security → Microphone\n';
+        resultInfo += '2. Find "Dart Sip Ua Example"\n';
+        resultInfo += '3. Toggle it ON';
+      }
+      
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Permission Status'),
+          content: SingleChildScrollView(
+            child: Text(resultInfo),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('OK'),
+            ),
+            if (!micStatus.isGranted || !camStatus.isGranted)
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  openAppSettings();
+                },
+                child: Text('Open Settings'),
+              ),
+          ],
+        ),
+      );
+      
+    } catch (e) {
+      print('❌ Permission request error: $e');
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Permission Error'),
+          content: Text('Error requesting permissions: $e'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+  
+  String _getStatusEmoji(PermissionStatus status) {
+    switch (status) {
+      case PermissionStatus.granted:
+        return '✅';
+      case PermissionStatus.denied:
+        return '❌';
+      case PermissionStatus.permanentlyDenied:
+        return '🚫';
+      default:
+        return '❓';
+    }
+  }
+
   List<Widget> _buildDialPad() {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
@@ -493,6 +689,15 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
                         onTap: () {
                           Navigator.pop(context);
                           Navigator.pushNamed(context, '/debug');
+                        },
+                      ),
+                      ListTile(
+                        leading: Icon(Icons.security),
+                        title: Text('Request Permissions'),
+                        subtitle: Text('Force iOS permission requests'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _forceRequestPermissions();
                         },
                       ),
                     ],

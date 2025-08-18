@@ -27,11 +27,11 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>$(PRODUCT_NAME) Camera Usage!</string>
+	<string>This app needs camera access to make video calls. Camera is used only during video calls and no recordings are saved.</string>
 	<key>NSContactsUsageDescription</key>
-	<string>$(PRODUCT_NAME) needs access to contacts to help you dial phone numbers from your contact list.</string>
+	<string>This app needs access to contacts to help you dial phone numbers from your contact list and display caller names.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>$(PRODUCT_NAME) Microphone Usage!</string>
+	<string>This app needs microphone access to make and receive voice calls. Microphone is used only during active calls.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIBackgroundModes</key>

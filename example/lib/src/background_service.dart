@@ -7,6 +7,7 @@ import 'package:sip_ua/sip_ua.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'user_state/sip_user.dart';
 
+@pragma('vm:entry-point')
 class BackgroundService {
   static final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
