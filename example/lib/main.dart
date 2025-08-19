@@ -14,6 +14,7 @@ import 'src/dialpad.dart';
 import 'src/register.dart';
 import 'src/debug_screen.dart';
 import 'src/recent_calls.dart';
+import 'src/home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -224,13 +225,16 @@ class MyApp extends ConsumerStatefulWidget {
 }
 
 class MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
+  final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+  
   Map<String, PageContentBuilder> routes = {
-    '/': ([SIPUAHelper? helper, Object? arguments]) => DialPadWidget(helper),
+    '/': ([SIPUAHelper? helper, Object? arguments]) => HomeScreen(helper),
+    '/dialpad': ([SIPUAHelper? helper, Object? arguments]) => DialPadWidget(helper),
     '/register': ([SIPUAHelper? helper, Object? arguments]) => RegisterWidget(helper),
     '/callscreen': ([SIPUAHelper? helper, Object? arguments]) => CallScreenWidget(helper, arguments as Call?),
     '/about': ([SIPUAHelper? helper, Object? arguments]) => AboutWidget(),
     '/debug': ([SIPUAHelper? helper, Object? arguments]) => DebugScreen(),
-    '/recent': ([SIPUAHelper? helper, Object? arguments]) => RecentCallsScreen(),
+    '/recent': ([SIPUAHelper? helper, Object? arguments]) => RecentCallsScreen(helper: helper),
   };
 
   Route<dynamic>? _onGenerateRoute(RouteSettings settings) {
@@ -268,20 +272,63 @@ class MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
     
     switch (state) {
       case AppLifecycleState.resumed:
-        print('App resumed - foreground');
+        print('🔄 App resumed - checking SIP connection...');
+        _handleAppResume();
         break;
       case AppLifecycleState.paused:
-        print('App paused - background');
+        print('⏸️ App paused - background');
         break;
       case AppLifecycleState.detached:
-        print('App detached');
+        print('🔌 App detached');
         break;
       case AppLifecycleState.inactive:
-        print('App inactive');
+        print('💤 App inactive');
         break;
       case AppLifecycleState.hidden:
-        print('App hidden');
+        print('👻 App hidden');
         break;
+    }
+  }
+
+  void _handleAppResume() async {
+    try {
+      // Small delay to allow UI to settle
+      await Future.delayed(Duration(milliseconds: 500));
+      
+      final sipUserCubit = ref.read(sipUserCubitProvider);
+      final helper = ref.read(sipHelperProvider);
+      
+      print('🔍 Checking SIP connection status...');
+      print('📊 Has saved user: ${sipUserCubit.state != null}');
+      print('📊 Is registered: ${sipUserCubit.isRegistered}');
+      print('📊 Helper registered: ${helper.registered}');
+      
+      // If we have a saved user but are not registered, attempt reconnection
+      if (sipUserCubit.state != null && !helper.registered) {
+        print('🔄 SIP connection lost, attempting auto-reconnection...');
+        
+        // Try to reconnect with saved user
+        await sipUserCubit.forceReconnect();
+        
+        // Show a brief status message to user
+        if (mounted) {
+          // Note: This would show briefly if the user is on the dialpad
+          ScaffoldMessenger.of(navigatorKey.currentContext ?? context).showSnackBar(
+            SnackBar(
+              content: Text('Reconnecting to SIP server...'),
+              duration: Duration(seconds: 2),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      } else if (sipUserCubit.state != null && helper.registered) {
+        print('✅ SIP connection is healthy');
+      } else {
+        print('ℹ️ No saved SIP user - manual connection required');
+      }
+      
+    } catch (e) {
+      print('❌ Error during app resume reconnection: $e');
     }
   }
 
@@ -293,6 +340,7 @@ class MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
       title: 'SIP Phone',
       debugShowCheckedModeBanner: false,
       theme: theme.currentTheme,
+      navigatorKey: navigatorKey,
       initialRoute: '/',
       onGenerateRoute: _onGenerateRoute,
     );

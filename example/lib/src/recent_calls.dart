@@ -1,8 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sip_ua/sip_ua.dart';
 import 'dart:convert';
 
 class RecentCallsScreen extends StatefulWidget {
+  final SIPUAHelper? helper;
+  
+  const RecentCallsScreen({Key? key, this.helper}) : super(key: key);
+  
   @override
   State<RecentCallsScreen> createState() => _RecentCallsScreenState();
 }
@@ -69,8 +76,58 @@ class _RecentCallsScreenState extends State<RecentCallsScreen> {
     }
   }
 
-  void _callNumber(String number) {
-    Navigator.pop(context, number);
+  void _callNumber(String number) async {
+    if (widget.helper == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('SIP helper not available'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    try {
+      print('📞 Making call from recent calls to: $number');
+      
+      // Prepare media constraints for voice call
+      final mediaConstraints = <String, dynamic>{
+        'audio': true,
+        'video': false,
+      };
+
+      print('🔄 Requesting media access...');
+      final mediaStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+      print('✅ Media stream obtained');
+
+      // Make the call
+      widget.helper!.call(number, voiceOnly: true, mediaStream: mediaStream);
+      
+      // Add to call history
+      await CallHistoryManager.addCall(
+        number: number,
+        type: CallType.outgoing,
+      );
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Calling $number...'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+    } catch (e) {
+      print('❌ Error making call: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to make call: ${e.toString()}'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   @override
@@ -78,6 +135,7 @@ class _RecentCallsScreenState extends State<RecentCallsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text('Recent Calls'),
+        automaticallyImplyLeading: false, // Remove back button since it's a main tab
         actions: [
           if (_callHistory.isNotEmpty)
             IconButton(

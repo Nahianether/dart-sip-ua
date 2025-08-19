@@ -12,6 +12,7 @@ import 'package:flutter_contacts/flutter_contacts.dart';
 import 'widgets/action_button.dart';
 import 'permission_helper.dart';
 import 'recent_calls.dart';
+import 'connection_manager.dart';
 
 class DialPadWidget extends ConsumerStatefulWidget {
   final SIPUAHelper? _helper;
@@ -640,6 +641,110 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     }
   }
   
+  void _showConnectionStatus() {
+    final connectionManager = ConnectionManager();
+    
+    // Perform immediate status check
+    connectionManager.performConnectionStatusCheck();
+    
+    // Get status for display
+    final status = connectionManager.getConnectionStatus();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(
+              status['isConnected'] ? Icons.wifi : Icons.wifi_off,
+              color: status['isConnected'] ? Colors.green : Colors.red,
+            ),
+            SizedBox(width: 8),
+            Text('Connection Status'),
+          ],
+        ),
+        content: Container(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _statusRow('Connected', status['isConnected'] ? '✅ YES' : '❌ NO'),
+                _statusRow('Should Maintain', status['shouldMaintainConnection'] ? '✅ YES' : '❌ NO'),
+                _statusRow('Connecting', status['isConnecting'] ? '🔄 YES' : '✅ NO'),
+                _statusRow('Network', status['hasNetworkConnectivity'] ? '✅ Available' : '❌ Unavailable'),
+                _statusRow('Attempts', '${status['reconnectionAttempts']}/${status['maxReconnectionAttempts']}'),
+                if (status['currentUserName'] != null)
+                  _statusRow('User', status['currentUserName']),
+                if (status['secondsSinceLastConnection'] != null)
+                  _statusRow('Last Connected', '${status['secondsSinceLastConnection']}s ago'),
+                if (status['secondsSinceLastAttempt'] != null)
+                  _statusRow('Last Attempt', '${status['secondsSinceLastAttempt']}s ago'),
+                SizedBox(height: 16),
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: status['isConnected'] ? Colors.green.withValues(alpha: 0.1) : Colors.red.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    status['isConnected'] 
+                        ? '✅ SIP connection is active and ready for calls'
+                        : '❌ SIP connection is down - auto-reconnection in progress',
+                    style: TextStyle(
+                      color: status['isConnected'] ? Colors.green : Colors.red,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Close'),
+          ),
+          if (!status['isConnected'])
+            ElevatedButton(
+              onPressed: () {
+                connectionManager.forceReconnect();
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Force reconnection initiated...'),
+                    backgroundColor: Colors.orange,
+                  ),
+                );
+              },
+              child: Text('Force Reconnect'),
+            ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _statusRow(String label, String value) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              label + ':',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(child: Text(value)),
+        ],
+      ),
+    );
+  }
+  
   String _getStatusEmoji(PermissionStatus status) {
     switch (status) {
       case PermissionStatus.granted:
@@ -852,17 +957,12 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
                         },
                       ),
                       ListTile(
-                        leading: Icon(Icons.history),
-                        title: Text('Recent Calls'),
-                        onTap: () async {
+                        leading: Icon(Icons.network_check),
+                        title: Text('Connection Status'),
+                        subtitle: Text('Test persistent connection'),
+                        onTap: () {
                           Navigator.pop(context);
-                          final result = await Navigator.pushNamed(context, '/recent');
-                          if (result != null && result is String) {
-                            // User selected a number from recent calls
-                            final textController = ref.read(textControllerProvider);
-                            textController.text = result;
-                            ref.read(destinationProvider.notifier).state = result;
-                          }
+                          _showConnectionStatus();
                         },
                       ),
                     ],

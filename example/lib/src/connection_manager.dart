@@ -20,17 +20,19 @@ class ConnectionManager implements SipUaHelperListener {
   SipUser? _currentUser;
   late StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
   
-  // Reconnection strategy
+  // Aggressive reconnection strategy for SIP calling app
   int _reconnectionAttempts = 0;
-  static const int _maxReconnectionAttempts = 10;
-  static const int _baseDelaySeconds = 2;
-  static const int _maxDelaySeconds = 300; // 5 minutes
+  static const int _maxReconnectionAttempts = 50; // More attempts for calling app
+  static const int _baseDelaySeconds = 1; // Faster initial retry
+  static const int _maxDelaySeconds = 60; // Max 1 minute delay
   
   // Connection state
   bool _isConnecting = false;
   bool _shouldMaintainConnection = false;
   DateTime? _lastSuccessfulConnection;
   bool _hasNetworkConnectivity = true;
+  Timer? _connectionMonitorTimer;
+  DateTime? _lastConnectionAttempt;
   
   // Callbacks for UI updates
   Function(RegistrationState)? onRegistrationStateChanged;
@@ -38,12 +40,12 @@ class ConnectionManager implements SipUaHelperListener {
   Function(TransportState)? onTransportStateChanged;
 
   void initialize(SIPUAHelper sipHelper) {
-    _logger.i('ConnectionManager: Initializing...');
+    _logger.i('ConnectionManager: Initializing for persistent SIP connection...');
     _sipHelper = sipHelper;
     _setupNetworkMonitoring();
     
-    // Do NOT add SIP listener or auto-connect - let SipUserCubit manage the connection
-    // ConnectionManager will only handle reconnection logic when explicitly called
+    // Check for saved connection and auto-connect if available
+    _loadSavedConnectionAndAutoConnect();
   }
 
   void _setupNetworkMonitoring() {
@@ -123,17 +125,64 @@ class ConnectionManager implements SipUaHelperListener {
   
   /// Check if should maintain connection
   bool get shouldMaintainConnection => _shouldMaintainConnection;
+  
+  /// Get comprehensive connection status for monitoring
+  Map<String, dynamic> getConnectionStatus() {
+    final now = DateTime.now();
+    return {
+      'isConnected': _sipHelper.registered,
+      'shouldMaintainConnection': _shouldMaintainConnection,
+      'isConnecting': _isConnecting,
+      'hasNetworkConnectivity': _hasNetworkConnectivity,
+      'reconnectionAttempts': _reconnectionAttempts,
+      'maxReconnectionAttempts': _maxReconnectionAttempts,
+      'lastSuccessfulConnection': _lastSuccessfulConnection?.toIso8601String(),
+      'lastConnectionAttempt': _lastConnectionAttempt?.toIso8601String(),
+      'secondsSinceLastConnection': _lastSuccessfulConnection != null 
+          ? now.difference(_lastSuccessfulConnection!).inSeconds 
+          : null,
+      'secondsSinceLastAttempt': _lastConnectionAttempt != null 
+          ? now.difference(_lastConnectionAttempt!).inSeconds 
+          : null,
+      'hasCurrentUser': _currentUser != null,
+      'currentUserName': _currentUser?.authUser,
+    };
+  }
+  
+  /// Force immediate connection status check and report
+  void performConnectionStatusCheck() {
+    final status = getConnectionStatus();
+    _logger.i('📊 CONNECTION STATUS REPORT:');
+    status.forEach((key, value) {
+      _logger.i('  $key: $value');
+    });
+    
+    // Force immediate action if needed
+    if (status['shouldMaintainConnection'] == true && 
+        status['isConnected'] == false && 
+        status['isConnecting'] == false) {
+      _logger.w('🚨 Status check reveals disconnected state - forcing reconnection');
+      _connectWithRetry();
+    }
+  }
 
   Future<void> _connectWithRetry() async {
-    if (_isConnecting || _currentUser == null) return;
+    if (_isConnecting || _currentUser == null) {
+      _logger.d('Skipping connection attempt - Connecting: $_isConnecting, Has user: ${_currentUser != null}');
+      return;
+    }
     
+    _lastConnectionAttempt = DateTime.now();
     _isConnecting = true;
     _stopReconnectionTimer();
     
+    _logger.i('🔄 Starting connection attempt ${_reconnectionAttempts + 1}');
+    
     try {
       await _connect(_currentUser!);
+      _logger.i('✅ Connection attempt completed');
     } catch (e) {
-      _logger.e('Connection failed: $e');
+      _logger.e('❌ Connection failed: $e');
       _scheduleReconnection();
     }
     
@@ -203,8 +252,9 @@ class ConnectionManager implements SipUaHelperListener {
     _reconnectionAttempts++;
     
     if (_reconnectionAttempts > _maxReconnectionAttempts) {
-      _logger.e('Max reconnection attempts reached. Stopping auto-reconnection.');
-      _shouldMaintainConnection = false;
+      _logger.e('Max reconnection attempts ($_maxReconnectionAttempts) reached for SIP calling app. This indicates a serious connectivity issue.');
+      // For a calling app, we should continue trying but with longer delays
+      _shouldMaintainConnection = true; // Keep trying for calling app
       return;
     }
     
@@ -232,20 +282,76 @@ class ConnectionManager implements SipUaHelperListener {
   void _startHeartbeat() {
     _stopHeartbeat();
     
-    // Send periodic OPTIONS to maintain connection
-    _heartbeatTimer = Timer.periodic(Duration(seconds: 60), (timer) {
-      if (_sipHelper.registered && _shouldMaintainConnection) {
-        _logger.d('Sending heartbeat...');
-        // The SIP library should handle keep-alive automatically,
-        // but we can monitor connection state here
+    // More frequent health checks for SIP calling app
+    _heartbeatTimer = Timer.periodic(Duration(seconds: 30), (timer) {
+      if (_shouldMaintainConnection) {
+        _logger.d('🔍 Connection health check - Registered: ${_sipHelper.registered}, Connecting: $_isConnecting');
         _checkConnectionHealth();
+        
+        // Ensure we're always connected
+        if (!_sipHelper.registered && !_isConnecting) {
+          _logger.w('❌ Not registered during health check - attempting reconnection');
+          _connectWithRetry();
+        }
       }
     });
+    
+    // Start additional connection monitor
+    _startConnectionMonitor();
+  }
+  
+  void _startConnectionMonitor() {
+    _stopConnectionMonitor();
+    
+    // Ultra-frequent monitoring for critical SIP calling app
+    _connectionMonitorTimer = Timer.periodic(Duration(seconds: 10), (timer) {
+      if (_shouldMaintainConnection) {
+        _performCriticalConnectionCheck();
+      }
+    });
+  }
+  
+  void _stopConnectionMonitor() {
+    _connectionMonitorTimer?.cancel();
+    _connectionMonitorTimer = null;
+  }
+  
+  void _performCriticalConnectionCheck() {
+    final now = DateTime.now();
+    final isRegistered = _sipHelper.registered;
+    
+    _logger.d('🔍 CRITICAL CHECK - Registered: $isRegistered, Should maintain: $_shouldMaintainConnection, Connecting: $_isConnecting');
+    
+    if (!isRegistered && _shouldMaintainConnection && !_isConnecting) {
+      // Check if we've been disconnected for too long
+      if (_lastSuccessfulConnection != null) {
+        final timeSinceLastConnection = now.difference(_lastSuccessfulConnection!);
+        if (timeSinceLastConnection.inSeconds > 120) { // 2 minutes without connection
+          _logger.e('🚨 CRITICAL: No connection for ${timeSinceLastConnection.inSeconds} seconds - forcing immediate reconnection');
+          _reconnectionAttempts = 0; // Reset attempts for critical reconnection
+          _connectWithRetry();
+        }
+      }
+      
+      // Check if last attempt was too long ago
+      if (_lastConnectionAttempt != null) {
+        final timeSinceLastAttempt = now.difference(_lastConnectionAttempt!);
+        if (timeSinceLastAttempt.inSeconds > 90) { // 1.5 minutes since last attempt
+          _logger.w('⏰ Last connection attempt was ${timeSinceLastAttempt.inSeconds} seconds ago - forcing new attempt');
+          _connectWithRetry();
+        }
+      } else {
+        // No attempt recorded yet
+        _logger.w('🔄 No connection attempts recorded - starting first attempt');
+        _connectWithRetry();
+      }
+    }
   }
 
   void _stopHeartbeat() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
+    _stopConnectionMonitor();
   }
 
   void _checkConnectionHealth() {
@@ -282,9 +388,23 @@ class ConnectionManager implements SipUaHelperListener {
   }
 
   Future<void> _loadSavedConnectionAndAutoConnect() async {
-    // DISABLED: Auto-connection is now handled by SipUserCubit only
-    // This prevents competing SIP UA instances and connection loops
-    _logger.i('ConnectionManager: Auto-connection disabled - SipUserCubit handles connection management');
+    try {
+      _logger.i('ConnectionManager: Checking for saved connection settings...');
+      
+      final prefs = await SharedPreferences.getInstance();
+      final savedUserJson = prefs.getString('persistent_sip_user');
+      final shouldMaintain = prefs.getBool('should_maintain_connection') ?? false;
+      
+      if (savedUserJson != null && shouldMaintain) {
+        _logger.i('ConnectionManager: Found saved connection, starting persistent connection...');
+        final sipUser = SipUser.fromJsonString(savedUserJson);
+        await startPersistentConnection(sipUser);
+      } else {
+        _logger.i('ConnectionManager: No saved connection found');
+      }
+    } catch (e) {
+      _logger.e('ConnectionManager: Error loading saved connection: $e');
+    }
   }
 
   @override

@@ -1,73 +1,33 @@
 import 'package:bloc/bloc.dart';
 import 'package:dart_sip_ua_example/src/user_state/sip_user.dart';
 import 'package:dart_sip_ua_example/src/background_service.dart';
+import 'package:dart_sip_ua_example/src/connection_manager.dart';
 import 'package:sip_ua/sip_ua.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SipUserCubit extends Cubit<SipUser?> implements SipUaHelperListener {
   final SIPUAHelper sipHelper;
+  late final ConnectionManager _connectionManager;
   bool _isRegistered = false;
   
   SipUserCubit({required this.sipHelper}) : super(null) {
     sipHelper.addSipUaHelperListener(this);
+    _connectionManager = ConnectionManager();
+    _connectionManager.initialize(sipHelper);
     _loadSavedUser();
   }
 
   void register(SipUser user) {
-    print('=== STARTING SIP CONNECTION ===');
+    print('=== STARTING PERSISTENT SIP CONNECTION ===');
     print('User: ${user.authUser}');
     print('Server: ${user.wsUrl}');
     
     emit(user);
     
-    // Direct SIP registration without ConnectionManager
-    _registerSip(user);
+    // Use ConnectionManager for persistent connection
+    _connectionManager.startPersistentConnection(user);
   }
   
-  void _registerSip(SipUser user) {
-    UaSettings settings = UaSettings();
-    
-    // Parse SIP URI
-    String sipUri = user.sipUri ?? '';
-    String username = user.authUser;
-    String domain = '';
-    
-    if (sipUri.contains('@')) {
-      final parts = sipUri.split('@');
-      if (parts.length > 1) {
-        username = parts[0].replaceAll('sip:', '');
-        domain = parts[1];
-      }
-    }
-    
-    String properSipUri = 'sip:$username@$domain';
-    
-    // Configure settings
-    settings.webSocketUrl = user.wsUrl ?? '';
-    settings.webSocketSettings.extraHeaders = user.wsExtraHeaders ?? {};
-    settings.webSocketSettings.allowBadCertificate = true;
-    settings.tcpSocketSettings.allowBadCertificate = true;
-    settings.transportType = user.selectedTransport;
-    settings.uri = properSipUri;
-    settings.host = domain;
-    settings.registrarServer = domain;
-    settings.realm = null;
-    settings.authorizationUser = username;
-    settings.password = user.password;
-    settings.displayName = user.displayName;
-    settings.userAgent = 'Flutter SIP Client v1.0.0';
-    settings.dtmfMode = DtmfMode.RFC2833;
-    settings.register = true;
-    settings.register_expires = 300;
-    settings.contact_uri = null;
-    
-    if (user.selectedTransport != TransportType.WS && user.port.isNotEmpty) {
-      settings.port = user.port;
-    }
-    
-    print('Starting SIP with settings: ${settings.uri} via ${settings.webSocketUrl}');
-    sipHelper.start(settings);
-  }
 
   Future<void> _loadSavedUser() async {
     final prefs = await SharedPreferences.getInstance();
@@ -80,10 +40,10 @@ class SipUserCubit extends Cubit<SipUser?> implements SipUaHelperListener {
       try {
         final sipUser = SipUser.fromJsonString(savedUserJson);
         emit(sipUser);
-        print('SipUserCubit: Found saved user ${sipUser.authUser}, auto-connecting...');
+        print('SipUserCubit: Found saved user ${sipUser.authUser}, starting persistent connection...');
         
-        // Auto-reconnect to maintain persistent connection
-        _registerSip(sipUser);
+        // Start persistent connection with ConnectionManager
+        _connectionManager.startPersistentConnection(sipUser);
         
       } catch (e) {
         print('Error loading saved user: $e');
@@ -114,27 +74,27 @@ class SipUserCubit extends Cubit<SipUser?> implements SipUaHelperListener {
 
   Future<void> disconnect() async {
     if (state != null) {
-      // Direct disconnect without ConnectionManager
-      if (sipHelper.registered) {
-        await sipHelper.unregister();
-      }
-      sipHelper.stop();
-      await _clearSavedUser();
+      print('🔌 User-initiated disconnect - stopping persistent connection');
+      // Stop persistent connection through ConnectionManager
+      await _connectionManager.stopPersistentConnection();
+      await _clearSavedUser(); // Clear data for manual disconnect
       emit(null);
       print('Disconnected and cleared saved registration');
     }
   }
   
+  /// Clear saved user data - only call for permanent disconnects
+  Future<void> permanentDisconnect() async {
+    print('🚫 Permanent disconnect - clearing saved user data');
+    await _clearSavedUser();
+    emit(null);
+  }
+  
   /// Force reconnection 
   Future<void> forceReconnect() async {
     if (state != null) {
-      print('Force reconnecting...');
-      if (sipHelper.registered) {
-        await sipHelper.unregister();
-      }
-      sipHelper.stop();
-      await Future.delayed(Duration(seconds: 1));
-      _registerSip(state!);
+      print('🔄 Force reconnecting via ConnectionManager...');
+      await _connectionManager.forceReconnect();
     }
   }
 
@@ -154,10 +114,12 @@ class SipUserCubit extends Cubit<SipUser?> implements SipUaHelperListener {
       }
     } else if (state.state == RegistrationStateEnum.UNREGISTERED ||
                state.state == RegistrationStateEnum.REGISTRATION_FAILED) {
-      _clearSavedUser();
+      _isRegistered = false; // Mark as not registered but keep user data
+      // ConnectionManager will handle reconnection attempts automatically
+      
       // Stop background service when unregistered
       BackgroundService.stopService();
-      print('Registration failed/unregistered - cleared saved data and stopped background service');
+      print('Registration failed/unregistered - ConnectionManager will handle reconnection');
     }
   }
 
@@ -168,7 +130,12 @@ class SipUserCubit extends Cubit<SipUser?> implements SipUaHelperListener {
 
   @override
   void transportStateChanged(TransportState state) {
-    // No-op for now
+    print('SipUserCubit: Transport state changed to ${state.state}');
+    
+    if (state.state == TransportStateEnum.DISCONNECTED && this.state != null) {
+      print('🔌 Transport disconnected - ConnectionManager will handle reconnection');
+      _isRegistered = false;
+    }
   }
 
   @override
