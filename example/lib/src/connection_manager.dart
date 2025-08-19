@@ -503,13 +503,19 @@ shWr8WQLs62E90vQhhZbhAB+PW6GhwkBWQ==
         await Future.delayed(Duration(milliseconds: 500)); // Short delay
       }
       
-      // Step 1: ALWAYS Connect VPN first (REQUIRED for SIP connection)
-      _logger.i('🔐 VPN connection is REQUIRED before SIP connection, connecting VPN first...');
-      final vpnConnected = await _connectVPN();
-      if (!vpnConnected) {
-        throw Exception('VPN connection failed - cannot establish secure SIP connection');
+      // Step 1: Connect VPN first if configured and should auto-connect
+      if (_vpnManager?.isConfigured == true && _vpnManager?.shouldAutoConnect == true) {
+        _logger.i('🔐 VPN auto-connect enabled, connecting VPN first...');
+        final vpnConnected = await _connectVPN();
+        if (!vpnConnected) {
+          _logger.w('❌ VPN connection failed, but proceeding with direct connection');
+          // Don't throw error - allow direct connection if VPN fails
+        } else {
+          _logger.i('✅ VPN connected successfully');
+        }
+      } else {
+        _logger.i('ℹ️ VPN not configured or auto-connect disabled, using direct connection');
       }
-      _logger.i('✅ VPN connected successfully, proceeding with SIP connection');
       
       // Step 2: Connect SIP
       await _connect(_currentUser!);
@@ -670,7 +676,7 @@ shWr8WQLs62E90vQhhZbhAB+PW6GhwkBWQ==
       }
     }
     
-    // Configure transport based on user selection (no auto-correction)
+    // Configure transport based on user selection with enhanced validation
     settings.transportType = transportType;
     
     if (transportType == TransportType.WS) {
@@ -680,98 +686,135 @@ shWr8WQLs62E90vQhhZbhAB+PW6GhwkBWQ==
       settings.webSocketSettings.extraHeaders = user.wsExtraHeaders ?? {};
       settings.webSocketSettings.allowBadCertificate = true;
       
-      // Validate WebSocket URL format
+      // Validate and correct WebSocket URL format
       if (!serverUrl.startsWith('ws://') && !serverUrl.startsWith('wss://')) {
-        _logger.w('⚠️ WebSocket transport selected but URL doesn\'t start with ws:// or wss://');
-        _logger.w('   Current URL: $serverUrl');
-        _logger.w('   Expected format: wss://server:port/path or ws://server:port/path');
+        _logger.w('⚠️ WebSocket URL missing protocol, attempting to correct');
+        _logger.w('   Original URL: $serverUrl');
+        
+        // Auto-correct by adding wss:// protocol
+        String correctedUrl;
+        if (serverUrl.contains(':443') || serverUrl.contains('wss') || serverUrl.toLowerCase().contains('secure')) {
+          correctedUrl = 'wss://$serverUrl';
+        } else {
+          correctedUrl = 'ws://$serverUrl';
+        }
+        
+        _logger.i('   Corrected URL: $correctedUrl');
+        settings.webSocketUrl = correctedUrl;
       }
+      
+      _logger.i('   WebSocket URL: ${settings.webSocketUrl}');
+      
     } else {
       // TCP Transport Configuration  
       _logger.i('🔌 Configuring TCP transport...');
       settings.tcpSocketSettings.allowBadCertificate = true;
       
-      // For TCP, we need host and port (not WebSocket URL)
-      if (serverUrl.isNotEmpty) {
-        try {
-          String hostUrl = serverUrl;
-          
-          // Handle different URL formats for TCP
-          if (serverUrl.startsWith('sip://') || serverUrl.startsWith('sips://')) {
-            hostUrl = serverUrl.replaceFirst('sip://', '').replaceFirst('sips://', '');
-          } else if (serverUrl.startsWith('ws://') || serverUrl.startsWith('wss://')) {
-            // Extract host:port from WebSocket URL for TCP use
-            final uri = Uri.parse(serverUrl);
-            hostUrl = '${uri.host}:${uri.port}';
-            _logger.w('⚠️ TCP transport selected but WebSocket URL provided');
-            _logger.w('   Extracting host:port from WebSocket URL: $hostUrl');
-          }
-          
-          // Parse host and port
-          if (hostUrl.contains(':')) {
-            final parts = hostUrl.split(':');
-            settings.host = parts[0];
-            if (parts.length > 1 && parts[1].isNotEmpty) {
-              // Remove path if present (e.g., "8089/ws" -> "8089")
-              final portPart = parts[1].split('/')[0];
-              settings.port = portPart;
-            }
-          } else {
-            settings.host = hostUrl;
-            // Use default ports for TCP
-            if (serverUrl.startsWith('sips://')) {
-              settings.port = '5061'; // Secure SIP
-            } else {
-              settings.port = '5060'; // Standard SIP
-            }
-          }
-        } catch (e) {
-          _logger.w('Failed to parse TCP server URL: $e');
-          _logger.w('Please use format: server:port or sip://server:port');
+      // Clean up server URL for TCP - remove any protocol prefixes
+      String cleanHost = serverUrl;
+      
+      // Remove protocols if present
+      if (cleanHost.startsWith('sip://')) {
+        cleanHost = cleanHost.replaceFirst('sip://', '');
+      } else if (cleanHost.startsWith('sips://')) {
+        cleanHost = cleanHost.replaceFirst('sips://', '');
+      } else if (cleanHost.startsWith('ws://')) {
+        cleanHost = cleanHost.replaceFirst('ws://', '');
+        _logger.w('⚠️ WebSocket URL provided for TCP transport, extracting host');
+      } else if (cleanHost.startsWith('wss://')) {
+        cleanHost = cleanHost.replaceFirst('wss://', '');
+        _logger.w('⚠️ WebSocket URL provided for TCP transport, extracting host');
+      }
+      
+      // Remove path component if present (e.g., "host:port/path" -> "host:port")
+      if (cleanHost.contains('/')) {
+        cleanHost = cleanHost.split('/')[0];
+      }
+      
+      _logger.i('   Cleaned host string: $cleanHost');
+      
+      // Parse host and port
+      if (cleanHost.contains(':')) {
+        final parts = cleanHost.split(':');
+        settings.host = parts[0].trim();
+        if (parts.length > 1 && parts[1].trim().isNotEmpty) {
+          settings.port = parts[1].trim();
         }
       } else {
-        _logger.w('⚠️ TCP transport selected but no server URL provided');
-        _logger.w('   Please provide server URL in format: server:port or sip://server:port');
+        // No port in URL, use the host and get port from user input or default
+        settings.host = cleanHost.trim();
+      }
+      
+      // Set port from user input if available, otherwise use defaults
+      if (user.port.isNotEmpty) {
+        settings.port = user.port.trim();
+        _logger.i('   Using user-provided port: ${user.port}');
+      } else if (settings.port == null || settings.port!.isEmpty) {
+        // Use default ports based on security
+        if (serverUrl.contains('sips://') || serverUrl.contains(':5061')) {
+          settings.port = '5061'; // Secure SIP
+        } else {
+          settings.port = '5060'; // Standard SIP
+        }
+        _logger.i('   Using default port: ${settings.port}');
+      }
+      
+      _logger.i('   Final TCP config: ${settings.host}:${settings.port}');
+      
+      // Validate host is not empty
+      if (settings.host == null || settings.host!.isEmpty) {
+        throw Exception('Invalid TCP configuration: Host cannot be empty');
+      }
+      
+      // Validate port is numeric and in valid range
+      if (settings.port != null && settings.port!.isNotEmpty) {
+        try {
+          int portNum = int.parse(settings.port!);
+          if (portNum < 1 || portNum > 65535) {
+            throw Exception('Port must be between 1 and 65535, got: $portNum');
+          }
+        } catch (e) {
+          throw Exception('Invalid port number: ${settings.port} ($e)');
+        }
       }
     }
     
-    // Set common settings
+    // Set common SIP settings
     settings.uri = properSipUri;
     settings.registrarServer = domain;
     settings.realm = null;
     settings.authorizationUser = username;
     settings.password = user.password;
-    settings.displayName = user.displayName;
-    settings.userAgent = 'Flutter SIP Client v1.0.0';
+    settings.displayName = user.displayName?.isNotEmpty == true ? user.displayName : username;
+    settings.userAgent = 'Flutter SIP Client v2.0';
     settings.dtmfMode = DtmfMode.RFC2833;
     settings.register = true;
-    settings.register_expires = 3600; // Longer expiry to reduce server load and reconnections
+    settings.register_expires = 300; // 5 minutes - balanced between too frequent and too long
     settings.contact_uri = null;
     
-    // Finalize host settings based on transport type
+    // Finalize host settings for WebSocket (TCP already configured above)
     if (settings.transportType == TransportType.WS) {
-      // For WebSocket, host is derived from domain (for SIP URI)
-      if (settings.host == null || settings.host!.isEmpty) {
+      // For WebSocket, derive host from WebSocket URL for SIP registration
+      try {
+        Uri wsUri = Uri.parse(settings.webSocketUrl ?? '');
+        String wsHost = wsUri.host;
+        if (wsHost.isNotEmpty) {
+          // Use WebSocket host if available, otherwise fall back to domain
+          settings.host = wsHost;
+          _logger.i('   Using WebSocket host for registration: $wsHost');
+        } else {
+          settings.host = domain;
+          _logger.i('   Using SIP domain for registration: $domain');
+        }
+      } catch (e) {
         settings.host = domain;
+        _logger.w('   Failed to parse WebSocket URL, using SIP domain: $domain');
       }
-    } else {
-      // For TCP, host should be set above from URL parsing, or use domain as fallback
-      if (settings.host == null || settings.host!.isEmpty) {
-        settings.host = domain;
-        _logger.w('⚠️ No host extracted from URL, using domain: $domain');
-      }
-      
-      // Override port if user provided specific port
-      if (user.port.isNotEmpty) {
-        settings.port = user.port;
-        _logger.i('   Using user-provided port: ${user.port}');
-      }
-      
-      // Ensure we have a port for TCP
-      if (settings.port == null || settings.port!.isEmpty) {
-        settings.port = '5060'; // Default SIP port
-        _logger.w('⚠️ No port specified for TCP, using default: 5060');
-      }
+    }
+    
+    // Final validation
+    if (settings.host == null || settings.host!.isEmpty) {
+      throw Exception('Host configuration is empty - cannot establish connection');
     }
     
     _logger.i('📋 Final connection settings:');
@@ -791,39 +834,76 @@ shWr8WQLs62E90vQhhZbhAB+PW6GhwkBWQ==
     } catch (e) {
       _logger.e('❌ SIP helper start failed: $e');
       
-      // Specific handling for different transport errors
+      // Enhanced error handling with specific troubleshooting
       final errorMsg = e.toString().toLowerCase();
+      String errorType = 'Connection Error';
       
       if (settings.transportType == TransportType.TCP) {
-        if (errorMsg.contains('tcp') || errorMsg.contains('socket')) {
-          _logger.e('🔧 TCP Connection Issue:');
-          _logger.e('   Current config: ${settings.host}:${settings.port}');
-          _logger.e('   - Verify server supports TCP connections on this port');
-          _logger.e('   - Check firewall/network connectivity');
-          _logger.e('   - Ensure host and port are correct');
-          _logger.e('   - Try telnet ${settings.host} ${settings.port} to test connectivity');
-          
-          if (serverUrl.startsWith('wss://') || serverUrl.startsWith('ws://')) {
-            _logger.e('💡 NOTE: Server URL suggests WebSocket, but TCP transport selected');
-            _logger.e('    If server only supports WebSocket, change transport type to WebSocket');
-          }
+        errorType = 'TCP Connection Error';
+        _logger.e('🔧 TCP Connection Troubleshooting:');
+        _logger.e('   Configuration: ${settings.host}:${settings.port}');
+        _logger.e('   Transport: ${settings.transportType}');
+        
+        if (errorMsg.contains('connection refused') || errorMsg.contains('refused')) {
+          _logger.e('❌ Connection Refused:');
+          _logger.e('   - SIP server may not be running on ${settings.host}:${settings.port}');
+          _logger.e('   - Port ${settings.port} may be closed or blocked');
+          _logger.e('   - Check if correct SIP port (5060/5061)');
+        } else if (errorMsg.contains('timeout') || errorMsg.contains('unreachable')) {
+          _logger.e('❌ Connection Timeout:');
+          _logger.e('   - Server ${settings.host} may be unreachable');
+          _logger.e('   - Network/firewall may be blocking connection');
+          _logger.e('   - Check hostname/IP address is correct');
+        } else if (errorMsg.contains('host') || errorMsg.contains('resolve')) {
+          _logger.e('❌ Host Resolution Error:');
+          _logger.e('   - Hostname ${settings.host} cannot be resolved');
+          _logger.e('   - Check DNS settings or use IP address');
+          _logger.e('   - Verify hostname spelling');
         }
+        
+        _logger.e('🔍 TCP Troubleshooting Steps:');
+        _logger.e('   1. Test basic connectivity: telnet ${settings.host} ${settings.port}');
+        _logger.e('   2. Verify SIP server is running and listening on port ${settings.port}');
+        _logger.e('   3. Check firewall rules on both client and server');
+        _logger.e('   4. Contact SIP provider to confirm TCP settings');
+        
       } else if (settings.transportType == TransportType.WS) {
-        if (errorMsg.contains('websocket') || errorMsg.contains('handshake')) {
-          _logger.e('🔧 WebSocket Connection Issue:');
-          _logger.e('   Current URL: ${settings.webSocketUrl}');
-          _logger.e('   - Verify WebSocket URL is correct');
-          _logger.e('   - Check if server supports WebSocket connections');
-          _logger.e('   - Verify SSL/TLS settings for wss:// URLs');
-          _logger.e('   - Check server WebSocket path (e.g., /ws)');
+        errorType = 'WebSocket Connection Error';
+        _logger.e('🔧 WebSocket Connection Troubleshooting:');
+        _logger.e('   URL: ${settings.webSocketUrl}');
+        _logger.e('   Transport: ${settings.transportType}');
+        
+        if (errorMsg.contains('handshake') || errorMsg.contains('upgrade')) {
+          _logger.e('❌ WebSocket Handshake Failed:');
+          _logger.e('   - Server may not support WebSocket connections');
+          _logger.e('   - WebSocket path may be incorrect (try /ws or /websocket)');
+          _logger.e('   - SSL/TLS certificate issues for wss:// URLs');
+        } else if (errorMsg.contains('connection refused')) {
+          _logger.e('❌ WebSocket Connection Refused:');
+          _logger.e('   - WebSocket server not running on specified port');
+          _logger.e('   - Port may be closed or blocked');
+          _logger.e('   - Check if WebSocket is enabled on SIP server');
         }
+        
+        _logger.e('🔍 WebSocket Troubleshooting Steps:');
+        _logger.e('   1. Verify WebSocket URL format: wss://server:port/path');
+        _logger.e('   2. Check if server supports WebSocket SIP transport');
+        _logger.e('   3. Test WebSocket connection with browser developer tools');
+        _logger.e('   4. Verify SSL certificate for wss:// URLs');
       }
       
       // General connectivity suggestions
-      _logger.e('🔍 General troubleshooting:');
-      _logger.e('   - Verify VPN is connected');
-      _logger.e('   - Check network connectivity');
-      _logger.e('   - Confirm server credentials are correct');
+      _logger.e('🔍 General Troubleshooting:');
+      _logger.e('   - Check internet connectivity');
+      _logger.e('   - Verify SIP server credentials (username/password)');
+      _logger.e('   - Try different network (mobile data vs WiFi)');
+      _logger.e('   - Contact SIP provider for correct connection settings');
+      
+      if (_vpnManager?.isConnected == true) {
+        _logger.e('   - VPN is connected - check if VPN allows SIP traffic');
+      } else {
+        _logger.e('   - Consider connecting VPN if required by provider');
+      }
       
       rethrow;
     }
@@ -1029,12 +1109,12 @@ shWr8WQLs62E90vQhhZbhAB+PW6GhwkBWQ==
 
   @override
   void registrationStateChanged(RegistrationState state) {
-    _logger.i('📞 Registration state changed: ${state.state}');
+    _logger.i('📞 Registration: ${state.state}');
     
     switch (state.state) {
       case RegistrationStateEnum.REGISTERED:
-        _logger.i('✅ Successfully registered to SIP server!');
-        _logger.i('🎉 Connection is now active and ready for calls');
+        _logger.i('✅ SIP Registration Successful!');
+        _logger.i('🎉 Ready for calls');
         
         // Track successful connection
         final now = DateTime.now();
@@ -1076,8 +1156,21 @@ shWr8WQLs62E90vQhhZbhAB+PW6GhwkBWQ==
         break;
         
       case RegistrationStateEnum.REGISTRATION_FAILED:
-        _logger.e('❌ Registration failed: ${state.cause}');
-        _logger.e('💡 This usually means incorrect credentials or server issues');
+        _consecutiveFailures++;
+        final cause = state.cause?.toString() ?? 'Unknown error';
+        _logger.e('❌ Registration Failed: $cause');
+        
+        // Analyze failure cause for better user feedback
+        if (cause.contains('401') || cause.contains('403') || cause.contains('Unauthorized')) {
+          _logger.e('🔐 Authentication Error - Check username/password');
+        } else if (cause.contains('timeout') || cause.contains('network')) {
+          _logger.e('🌐 Network Error - Check connectivity and server URL');
+        } else if (cause.contains('404') || cause.contains('Not Found')) {
+          _logger.e('🔍 SIP URI Error - Check if SIP address exists on server');
+        } else {
+          _logger.e('⚠️ Server Error - Contact SIP provider');
+        }
+        
         if (_shouldMaintainConnection && !_isConnecting) {
           _logger.i('🔄 Scheduling reconnection attempt...');
           _scheduleReconnection();

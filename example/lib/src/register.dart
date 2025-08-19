@@ -7,9 +7,6 @@ import 'package:sip_ua/sip_ua.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io';
 
-import 'widgets/vpn_requirement_dialog.dart';
-import 'connection_manager.dart';
-
 class RegisterWidget extends ConsumerStatefulWidget {
   final SIPUAHelper? _helper;
 
@@ -21,141 +18,119 @@ class RegisterWidget extends ConsumerStatefulWidget {
 
 class _MyRegisterWidget extends ConsumerState<RegisterWidget>
     implements SipUaHelperListener {
-  // Controllers are now provided by Riverpod providers
-  final Map<String, String> _wsExtraHeaders = {
-    // 'Origin': ' https://tryit.jssip.net',
-    // 'Host': 'tryit.jssip.net:10443'
-  };
+  final Map<String, String> _wsExtraHeaders = {};
   late SharedPreferences _preferences;
+  bool _isInitialized = false;
 
   SIPUAHelper? get helper => widget._helper;
-
-  // SipUserCubit is now provided by Riverpod
 
   @override
   void initState() {
     super.initState();
-    // DO NOT add SIP listener here - ConnectionManager handles it
-    // helper!.addSipUaHelperListener(this);
-    print('RegisterWidget: SIP events managed by ConnectionManager');
+    print('RegisterWidget: Initializing without provider modifications');
     
-    // Set WebSocket as default for user's configuration
-    if (kIsWeb) {
-      ref.read(transportTypeProvider.notifier).state = TransportType.WS;
-    } else {
-      // Default to WebSocket for the user's wss:// URL
-      ref.read(transportTypeProvider.notifier).state = TransportType.WS;
-      print('🔧 Transport defaulted to WebSocket for wss:// URL compatibility');
+    // Use post-frame callback to initialize after build is complete
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeAfterBuild();
+    });
+  }
+
+  void _initializeAfterBuild() async {
+    if (!mounted || _isInitialized) return;
+    _isInitialized = true;
+    
+    try {
+      _loadSettings();
+    } catch (e) {
+      print('❌ Error during initialization: $e');
     }
-    
-    _loadSettings();
   }
 
   @override
   void dispose() {
+    helper?.removeSipUaHelperListener(this);
     super.dispose();
   }
 
-  @override
-  void deactivate() {
-    super.deactivate();
-    helper!.removeSipUaHelperListener(this);
-    _saveSettings();
-  }
-
   void _loadSettings() async {
-    _preferences = await SharedPreferences.getInstance();
-    
-    final portController = ref.read(portControllerProvider);
-    final wsUriController = ref.read(wsUriControllerProvider);
-    final sipUriController = ref.read(sipUriControllerProvider);
-    final displayNameController = ref.read(displayNameControllerProvider);
-    final passwordController = ref.read(passwordControllerProvider);
-    final authorizationUserController = ref.read(authorizationUserControllerProvider);
-    
-    portController.text = _preferences.getString('port') ?? '5060';
-    wsUriController.text = _preferences.getString('ws_uri') ?? 'wss://sip.ibos.io:8089/ws';
-    sipUriController.text = _preferences.getString('sip_uri') ?? '564613@sip.ibos.io';
-    displayNameController.text = _preferences.getString('display_name') ?? '564613';
-    passwordController.text = _preferences.getString('password') ?? 'iBOS123';
-    authorizationUserController.text = _preferences.getString('auth_user') ?? '564613';
-    
-    // Auto-detect and set correct transport type based on URL
-    _detectAndSuggestTransportType();
-  }
-
-  void _detectAndSuggestTransportType() {
-    final wsUriController = ref.read(wsUriControllerProvider);
-    final currentTransport = ref.read(transportTypeProvider);
-    
-    String serverUrl = wsUriController.text.trim();
-    if (serverUrl.isEmpty) return;
-    
-    // Detect transport type based on URL format
-    TransportType suggestedTransport;
-    if (serverUrl.startsWith('wss://') || serverUrl.startsWith('ws://') || serverUrl.contains('/ws')) {
-      suggestedTransport = TransportType.WS;
-      print('🔍 URL analysis: "$serverUrl" appears to be WebSocket format');
-    } else if (serverUrl.startsWith('sip://') || serverUrl.contains(':5060') || serverUrl.contains(':5061')) {
-      suggestedTransport = TransportType.TCP;
-      print('🔍 URL analysis: "$serverUrl" appears to be TCP/SIP format');
-    } else {
-      // Default to WebSocket for uncertain cases
-      suggestedTransport = TransportType.WS;
-      print('🔍 URL analysis: "$serverUrl" format unclear, defaulting to WebSocket');
-    }
-    
-    // If transport type doesn't match URL format, auto-correct it
-    if (currentTransport != suggestedTransport) {
-      print('🔧 Transport mismatch detected:');
-      print('   Current: ${currentTransport.toString()}');
-      print('   Suggested: ${suggestedTransport.toString()}');
-      print('   Auto-correcting transport type to match URL format');
+    try {
+      _preferences = await SharedPreferences.getInstance();
       
-      ref.read(transportTypeProvider.notifier).state = suggestedTransport;
+      // Load transport type from preferences
+      String savedTransport = _preferences.getString('transport_type') ?? 'TransportType.WS';
+      TransportType transport = savedTransport.contains('TCP') ? TransportType.TCP : TransportType.WS;
       
-      // Save the corrected transport type
-      _preferences.setString('transport_type', suggestedTransport.toString());
-    } else {
-      print('✅ Transport type ${currentTransport.toString()} matches URL format');
+      if (mounted) {
+        // Set transport type safely
+        ref.read(transportTypeProvider.notifier).state = transport;
+      }
+      
+      // Load controller values
+      final portController = ref.read(portControllerProvider);
+      final wsUriController = ref.read(wsUriControllerProvider);
+      final sipUriController = ref.read(sipUriControllerProvider);
+      final displayNameController = ref.read(displayNameControllerProvider);
+      final passwordController = ref.read(passwordControllerProvider);
+      final authorizationUserController = ref.read(authorizationUserControllerProvider);
+      
+      // Set default values based on transport type
+      if (transport == TransportType.TCP) {
+        portController.text = _preferences.getString('port') ?? '5060';
+        wsUriController.text = _preferences.getString('server_url') ?? 'sip.ibos.io';
+        sipUriController.text = _preferences.getString('sip_uri') ?? '564613@sip.ibos.io';
+      } else {
+        portController.text = _preferences.getString('port') ?? '8089';
+        wsUriController.text = _preferences.getString('server_url') ?? 'wss://sip.ibos.io:8089/ws';
+        sipUriController.text = _preferences.getString('sip_uri') ?? '564613@sip.ibos.io';
+      }
+      
+      displayNameController.text = _preferences.getString('display_name') ?? '564613';
+      passwordController.text = _preferences.getString('password') ?? 'iBOS123';
+      authorizationUserController.text = _preferences.getString('auth_user') ?? '564613';
+      
+      print('📋 Settings loaded successfully');
+    } catch (e) {
+      print('❌ Error loading settings: $e');
     }
   }
 
   void _saveSettings() {
-    final portController = ref.read(portControllerProvider);
-    final wsUriController = ref.read(wsUriControllerProvider);
-    final sipUriController = ref.read(sipUriControllerProvider);
-    final displayNameController = ref.read(displayNameControllerProvider);
-    final passwordController = ref.read(passwordControllerProvider);
-    final authorizationUserController = ref.read(authorizationUserControllerProvider);
-    final selectedTransport = ref.read(transportTypeProvider);
-    
-    _preferences.setString('port', portController.text);
-    _preferences.setString('ws_uri', wsUriController.text);
-    _preferences.setString('sip_uri', sipUriController.text);
-    _preferences.setString('display_name', displayNameController.text);
-    _preferences.setString('password', passwordController.text);
-    _preferences.setString('auth_user', authorizationUserController.text);
-    _preferences.setString('transport_type', selectedTransport.toString());
+    try {
+      if (!_isInitialized) return;
+      
+      final portController = ref.read(portControllerProvider);
+      final wsUriController = ref.read(wsUriControllerProvider);
+      final sipUriController = ref.read(sipUriControllerProvider);
+      final displayNameController = ref.read(displayNameControllerProvider);
+      final passwordController = ref.read(passwordControllerProvider);
+      final authorizationUserController = ref.read(authorizationUserControllerProvider);
+      final selectedTransport = ref.read(transportTypeProvider);
+      
+      _preferences.setString('port', portController.text);
+      _preferences.setString('server_url', wsUriController.text);
+      _preferences.setString('sip_uri', sipUriController.text);
+      _preferences.setString('display_name', displayNameController.text);
+      _preferences.setString('password', passwordController.text);
+      _preferences.setString('auth_user', authorizationUserController.text);
+      _preferences.setString('transport_type', selectedTransport.toString());
+      
+      print('💾 Settings saved');
+    } catch (e) {
+      print('❌ Error saving settings: $e');
+    }
+  }
+
+  void _handleTransportChange(TransportType newTransport) {
+    if (mounted && _isInitialized) {
+      ref.read(transportTypeProvider.notifier).state = newTransport;
+      _saveSettings();
+    }
   }
 
   @override
   void registrationStateChanged(RegistrationState state) {
-    print('=== REGISTRATION STATE CHANGED ===');
-    print('State: ${state.state}');
-    print('Cause: ${state.cause}');
-    if (state.cause != null) {
-      print('Cause details: ${state.cause.toString()}');
-      print('Cause type: ${state.cause.runtimeType}');
-    }
+    print('Registration state: ${state.state}');
     
-    final wsUriController = ref.read(wsUriControllerProvider);
-    final sipUriController = ref.read(sipUriControllerProvider);
-    
-    print('Registration attempt with server: ${wsUriController.text}');
-    print('SIP URI: ${sipUriController.text}');
-    
-    // Show user-friendly error message
     if (state.state == RegistrationStateEnum.REGISTRATION_FAILED) {
       String errorMsg = 'Registration failed';
       if (state.cause != null) {
@@ -169,16 +144,20 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
         }
       }
       
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(errorMsg),
-          duration: Duration(seconds: 5),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMsg),
+            duration: Duration(seconds: 5),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
     
-    ref.read(registrationStateProvider.notifier).state = state;
+    if (mounted) {
+      ref.read(registrationStateProvider.notifier).state = state;
+    }
   }
 
   void _alert(BuildContext context, String alertFieldName) {
@@ -211,50 +190,106 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
     final selectedTransport = ref.read(transportTypeProvider);
     final currentUser = ref.read(sipUserCubitProvider);
     
-    if (wsUriController.text == '') {
-      _alert(context, "WebSocket URL");
-      return;
-    } else if (sipUriController.text == '') {
+    // Validation based on transport type
+    if (selectedTransport == TransportType.WS) {
+      if (wsUriController.text.trim().isEmpty) {
+        _alert(context, "WebSocket URL");
+        return;
+      }
+      if (!wsUriController.text.startsWith('ws://') && !wsUriController.text.startsWith('wss://')) {
+        _alert(context, "WebSocket URL must start with ws:// or wss://");
+        return;
+      }
+    } else if (selectedTransport == TransportType.TCP) {
+      if (wsUriController.text.trim().isEmpty) {
+        _alert(context, "Server Host/IP");
+        return;
+      }
+      if (portController.text.trim().isEmpty) {
+        _alert(context, "Port number");
+        return;
+      }
+      try {
+        int port = int.parse(portController.text);
+        if (port < 1 || port > 65535) {
+          _alert(context, "Port must be between 1 and 65535");
+          return;
+        }
+      } catch (e) {
+        _alert(context, "Port must be a valid number");
+        return;
+      }
+    }
+    
+    if (sipUriController.text.trim().isEmpty) {
       _alert(context, "SIP URI");
       return;
     }
-
-    // Check VPN connection requirement before registration
-    final connectionManager = ConnectionManager();
-    final vpnManager = connectionManager.vpnManager;
     
-    if (!vpnManager.isConnected) {
-      print('🔐 VPN not connected - showing requirement dialog before registration');
-      
-      await showVPNRequirementDialog(
-        context,
-        customMessage: 'VPN connection is required to register to SIP server. Please connect to VPN first.',
-        onConfigureVPN: () {
-          Navigator.pushNamed(context, '/vpn-config');
-        },
-        onCancel: () {
-          print('🚫 User cancelled registration due to VPN requirement');
-        },
-      );
-      
-      // Cancel registration if VPN is not connected
-      print('❌ Registration cancelled - VPN connection required');
+    if (passwordController.text.trim().isEmpty) {
+      _alert(context, "Password");
       return;
     }
-    
-    print('✅ VPN is connected - proceeding with registration');
 
-    _saveSettings();
+    // Show loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text('Connecting...'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('Establishing ${selectedTransport.toString().split('.').last} connection...'),
+          ],
+        ),
+      ),
+    );
 
-    currentUser.register(SipUser(
+    try {
+      _saveSettings();
+      
+      String serverUrl = wsUriController.text.trim();
+      
+      currentUser.register(SipUser(
         selectedTransport: selectedTransport,
         wsExtraHeaders: _wsExtraHeaders,
-        sipUri: sipUriController.text,
-        wsUrl: wsUriController.text,
-        port: portController.text,
-        displayName: displayNameController.text,
-        password: passwordController.text,
-        authUser: authorizationUserController.text));
+        sipUri: sipUriController.text.trim(),
+        wsUrl: serverUrl,
+        port: portController.text.trim(),
+        displayName: displayNameController.text.trim().isNotEmpty 
+            ? displayNameController.text.trim() 
+            : authorizationUserController.text.trim(),
+        password: passwordController.text.trim(),
+        authUser: authorizationUserController.text.trim().isNotEmpty 
+            ? authorizationUserController.text.trim() 
+            : sipUriController.text.trim().split('@')[0]
+      ));
+              
+      // Close loading dialog
+      Future.delayed(Duration(seconds: 2), () {
+        if (mounted && Navigator.canPop(context)) {
+          Navigator.pop(context);
+        }
+      });
+      
+    } catch (e) {
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Connection failed: $e'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 5),
+          ),
+        );
+      }
+    }
   }
 
   void _disconnect() {
@@ -266,24 +301,28 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
     final currentUser = ref.read(sipUserCubitProvider);
     currentUser.forceReconnect();
     
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Attempting to reconnect...'),
-        duration: Duration(seconds: 2),
-      ),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Attempting to reconnect...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   Future<void> _testConnectivity() async {
     final wsUriController = ref.read(wsUriControllerProvider);
     String wsUrl = wsUriController.text;
     if (wsUrl.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Please enter WebSocket URL first'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Please enter WebSocket URL first'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
       return;
     }
 
@@ -291,27 +330,23 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title: Text('Testing Connection'),
+        title: Text('Testing WebSocket Connection'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             CircularProgressIndicator(),
             SizedBox(height: 16),
-            Text('Testing connection to server...'),
+            Text('Testing WebSocket connection...'),
           ],
         ),
       ),
     );
 
     try {
-      // Extract host and port from WebSocket URL
       Uri uri = Uri.parse(wsUrl);
       String host = uri.host;
       int port = uri.port;
       
-      print('Testing connection to $host:$port');
-      
-      // Test basic connectivity
       Socket? socket;
       bool canConnect = false;
       String errorMessage = '';
@@ -325,84 +360,205 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
         errorMessage = e.toString();
       }
       
-      Navigator.pop(context); // Close loading dialog
+      if (mounted) Navigator.pop(context);
       
       String resultMessage;
-      
       if (canConnect) {
-        resultMessage = '✅ Connection successful!\nServer is reachable at $host:$port';
+        resultMessage = '✅ WebSocket Server Reachable!\n';
+        resultMessage += 'Host: $host\nPort: $port\n';
+        resultMessage += 'Protocol: ${wsUrl.startsWith('wss://') ? 'Secure WebSocket (WSS)' : 'WebSocket (WS)'}\n\n';
+        resultMessage += 'Basic TCP connectivity confirmed.';
       } else {
-        resultMessage = '❌ Connection failed!\nCannot reach $host:$port\n\nError: $errorMessage\n\nTips:\n• Check if server is running\n• Verify URL is correct\n• Check firewall settings\n• Try from different network';
+        resultMessage = '❌ WebSocket Connection Failed!\n';
+        resultMessage += 'Cannot reach $host:$port\n\nError: $errorMessage';
       }
       
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text('Connection Test Result'),
-          content: SingleChildScrollView(
-            child: Text(resultMessage),
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text('WebSocket Test Result'),
+            content: SingleChildScrollView(child: Text(resultMessage)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text('OK'),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text('OK'),
-            ),
+        );
+      }
+    } catch (e) {
+      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error testing connection: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+  
+  Future<void> _testTCPConnectivity() async {
+    final wsUriController = ref.read(wsUriControllerProvider);
+    final portController = ref.read(portControllerProvider);
+    
+    String host = wsUriController.text.trim();
+    String portText = portController.text.trim();
+    
+    if (host.isEmpty || portText.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Please enter both server host and port'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+    
+    int port;
+    try {
+      port = int.parse(portText);
+      if (port < 1 || port > 65535) {
+        throw Exception('Invalid port range');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Please enter a valid port number (1-65535)'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text('Testing TCP Connection'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('Testing TCP connection to $host:$port...'),
           ],
         ),
-      );
+      ),
+    );
+
+    try {
+      Socket? socket;
+      bool canConnect = false;
+      String errorMessage = '';
       
+      try {
+        socket = await Socket.connect(host, port, timeout: Duration(seconds: 10));
+        canConnect = true;
+        socket.destroy();
+      } catch (e) {
+        canConnect = false;
+        errorMessage = e.toString();
+      }
+      
+      if (mounted) Navigator.pop(context);
+      
+      String resultMessage;
+      if (canConnect) {
+        resultMessage = '✅ TCP Connection Successful!\n';
+        resultMessage += 'Host: $host\nPort: $port\n';
+        resultMessage += 'Protocol: ${port == 5061 ? 'Secure SIP (TLS)' : 'Standard SIP'}';
+      } else {
+        resultMessage = '❌ TCP Connection Failed!\n';
+        resultMessage += 'Cannot reach $host:$port\n\nError: $errorMessage';
+      }
+      
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text('TCP Test Result'),
+            content: SingleChildScrollView(child: Text(resultMessage)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
     } catch (e) {
-      Navigator.pop(context); // Close loading dialog
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error testing connection: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error testing TCP connection: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
-  Widget _buildTransportMismatchWarning() {
-    final wsUriController = ref.watch(wsUriControllerProvider);
+  Widget _buildTransportInfo() {
     final selectedTransport = ref.watch(transportTypeProvider);
     
-    String serverUrl = wsUriController.text.trim();
-    if (serverUrl.isEmpty) return SizedBox.shrink();
+    String infoTitle;
+    String infoMessage;
+    IconData infoIcon;
+    Color infoColor;
     
-    bool isMismatch = false;
-    String warningMessage = '';
-    
-    if (selectedTransport == TransportType.TCP && 
-        (serverUrl.startsWith('wss://') || serverUrl.startsWith('ws://') || serverUrl.contains('/ws'))) {
-      isMismatch = true;
-      warningMessage = 'TCP transport selected but URL appears to be WebSocket format. Consider switching to WebSocket transport.';
-    } else if (selectedTransport == TransportType.WS && 
-               (serverUrl.startsWith('sip://') || (serverUrl.contains(':5060') || serverUrl.contains(':5061')) && !serverUrl.contains('ws'))) {
-      isMismatch = true;
-      warningMessage = 'WebSocket transport selected but URL appears to be TCP format. Consider switching to TCP transport.';
+    if (selectedTransport == TransportType.WS) {
+      infoTitle = 'WebSocket Transport';
+      infoMessage = '• Uses HTTP/HTTPS protocols\n• Better firewall compatibility\n• Good for web applications\n• URL format: wss://server:port/path';
+      infoIcon = Icons.wifi;
+      infoColor = Colors.blue;
+    } else {
+      infoTitle = 'TCP Transport';
+      infoMessage = '• Direct TCP connection\n• Lower latency\n• Traditional SIP setup\n• Format: server:port (no protocol)';
+      infoIcon = Icons.cable;
+      infoColor = Colors.green;
     }
     
-    if (!isMismatch) return SizedBox.shrink();
-    
     return Container(
-      margin: EdgeInsets.only(top: 8),
+      margin: EdgeInsets.only(top: 8, bottom: 16),
       padding: EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.orange.withValues(alpha: 0.1),
+        color: infoColor.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+        border: Border.all(color: infoColor.withValues(alpha: 0.3)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.warning, color: Colors.orange, size: 20),
-          SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              warningMessage,
-              style: TextStyle(
-                color: Colors.orange.shade700,
-                fontSize: 13,
+          Row(
+            children: [
+              Icon(infoIcon, color: infoColor, size: 20),
+              SizedBox(width: 8),
+              Text(
+                infoTitle,
+                style: TextStyle(
+                  color: infoColor.withValues(alpha: 0.8),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
+            ],
+          ),
+          SizedBox(height: 8),
+          Text(
+            infoMessage,
+            style: TextStyle(
+              color: infoColor.withValues(alpha: 0.7),
+              fontSize: 13,
             ),
           ),
         ],
@@ -416,6 +572,8 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
     final registerState = ref.watch(registrationStateProvider) ?? helper!.registerState;
     final isPasswordVisible = ref.watch(passwordVisibilityProvider);
     final selectedTransport = ref.watch(transportTypeProvider);
+    
+    // Watch controllers but don't modify them in build
     final passwordController = ref.watch(passwordControllerProvider);
     final wsUriController = ref.watch(wsUriControllerProvider);
     final sipUriController = ref.watch(sipUriControllerProvider);
@@ -425,10 +583,7 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          "Account Settings",
-          style: theme.textTheme.headlineMedium,
-        ),
+        title: Text("Account Settings", style: theme.textTheme.headlineMedium),
         centerTitle: true,
       ),
       bottomNavigationBar: SafeArea(
@@ -495,6 +650,7 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Status Card
             Card(
               child: Container(
                 padding: const EdgeInsets.all(16),
@@ -531,9 +687,7 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
                       const SizedBox(height: 8),
                       Text(
                         'Registration successful! Your account will auto-reconnect on restart.',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: Colors.green,
-                        ),
+                        style: theme.textTheme.bodySmall?.copyWith(color: Colors.green),
                         textAlign: TextAlign.center,
                       ),
                     ],
@@ -541,9 +695,7 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
                       const SizedBox(height: 8),
                       Text(
                         'Registration failed. Please check your settings and try again.',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: Colors.red,
-                        ),
+                        style: theme.textTheme.bodySmall?.copyWith(color: Colors.red),
                         textAlign: TextAlign.center,
                       ),
                     ],
@@ -552,12 +704,12 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
               ),
             ),
             const SizedBox(height: 24),
+            
+            // Transport Type Selection
             if (!kIsWeb) ...[
               Text(
                 'Connection Type',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+                style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 12),
               Row(
@@ -566,10 +718,7 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
                     child: RadioListTile<TransportType>(
                       value: TransportType.TCP,
                       groupValue: selectedTransport,
-                      onChanged: (value) {
-                        ref.read(transportTypeProvider.notifier).state = value!;
-                        _saveSettings();
-                      },
+                      onChanged: (value) => _handleTransportChange(value!),
                       title: Text('TCP'),
                       contentPadding: EdgeInsets.zero,
                     ),
@@ -578,33 +727,49 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
                     child: RadioListTile<TransportType>(
                       value: TransportType.WS,
                       groupValue: selectedTransport,
-                      onChanged: (value) {
-                        ref.read(transportTypeProvider.notifier).state = value!;
-                        _saveSettings();
-                      },
+                      onChanged: (value) => _handleTransportChange(value!),
                       title: Text('WebSocket'),
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
                 ],
               ),
-              _buildTransportMismatchWarning(),
-              const SizedBox(height: 16),
+              _buildTransportInfo(),
             ],
+            
+            // Server Configuration
             if (selectedTransport == TransportType.WS) ...[
               Text(
                 'WebSocket URL',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+                style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 8),
               TextFormField(
                 controller: wsUriController,
                 keyboardType: TextInputType.url,
                 autocorrect: false,
-                decoration: const InputDecoration(
+                onChanged: (value) {
+                  // Auto-detect port from WebSocket URL
+                  Future.microtask(() {
+                    try {
+                      if (value.startsWith('ws://') || value.startsWith('wss://')) {
+                        Uri uri = Uri.parse(value);
+                        if (uri.port != 80 && uri.port != 443) {
+                          portController.text = uri.port.toString();
+                        } else if (value.startsWith('wss://')) {
+                          portController.text = '443';
+                        } else {
+                          portController.text = '80';
+                        }
+                      }
+                    } catch (e) {
+                      // Ignore parsing errors
+                    }
+                  });
+                },
+                decoration: InputDecoration(
                   hintText: 'wss://your-server.com:port/path',
+                  helperText: 'Example: wss://sip.ibos.io:8089/ws',
                   prefixIcon: Icon(Icons.link),
                 ),
               ),
@@ -615,36 +780,56 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
                   onPressed: _testConnectivity,
                   icon: Icon(Icons.network_ping, size: 18),
                   label: Text('Test Connection'),
-                  style: TextButton.styleFrom(
-                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  ),
                 ),
               ),
               const SizedBox(height: 16),
-            ],
-            if (selectedTransport == TransportType.TCP) ...[
+            ] else if (selectedTransport == TransportType.TCP) ...[
+              Text(
+                'Server Host/IP',
+                style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: wsUriController,
+                keyboardType: TextInputType.url,
+                autocorrect: false,
+                decoration: InputDecoration(
+                  hintText: 'server.example.com or 192.168.1.100',
+                  helperText: 'Enter hostname or IP address (no protocol)',
+                  prefixIcon: Icon(Icons.dns),
+                ),
+              ),
+              const SizedBox(height: 16),
               Text(
                 'Port',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+                style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 8),
               TextFormField(
                 controller: portController,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  hintText: '5060',
+                decoration: InputDecoration(
+                  hintText: '5060 (standard) or 5061 (secure)',
+                  helperText: 'Standard SIP: 5060, Secure SIP: 5061',
                   prefixIcon: Icon(Icons.settings_ethernet),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: _testTCPConnectivity,
+                  icon: Icon(Icons.network_ping, size: 18),
+                  label: Text('Test TCP Connection'),
                 ),
               ),
               const SizedBox(height: 16),
             ],
+            
+            // SIP Configuration
             Text(
               'SIP URI',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
+              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),
             TextFormField(
@@ -659,9 +844,7 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
             const SizedBox(height: 16),
             Text(
               'Authorization User',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
+              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),
             TextFormField(
@@ -676,9 +859,7 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
             const SizedBox(height: 16),
             Text(
               'Password',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
+              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),
             TextFormField(
@@ -702,9 +883,7 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
             const SizedBox(height: 16),
             Text(
               'Display Name',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
+              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),
             TextFormField(
@@ -724,7 +903,7 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
 
   @override
   void callStateChanged(Call call, CallState state) {
-    //NO OP
+    // NO OP
   }
 
   @override
