@@ -7,6 +7,9 @@ import 'package:sip_ua/sip_ua.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io';
 
+import 'widgets/vpn_requirement_dialog.dart';
+import 'connection_manager.dart';
+
 class RegisterWidget extends ConsumerStatefulWidget {
   final SIPUAHelper? _helper;
 
@@ -35,10 +38,17 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
     // DO NOT add SIP listener here - ConnectionManager handles it
     // helper!.addSipUaHelperListener(this);
     print('RegisterWidget: SIP events managed by ConnectionManager');
-    _loadSettings();
+    
+    // Set WebSocket as default for user's configuration
     if (kIsWeb) {
       ref.read(transportTypeProvider.notifier).state = TransportType.WS;
+    } else {
+      // Default to WebSocket for the user's wss:// URL
+      ref.read(transportTypeProvider.notifier).state = TransportType.WS;
+      print('🔧 Transport defaulted to WebSocket for wss:// URL compatibility');
     }
+    
+    _loadSettings();
   }
 
   @override
@@ -69,6 +79,46 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
     displayNameController.text = _preferences.getString('display_name') ?? '564613';
     passwordController.text = _preferences.getString('password') ?? 'iBOS123';
     authorizationUserController.text = _preferences.getString('auth_user') ?? '564613';
+    
+    // Auto-detect and set correct transport type based on URL
+    _detectAndSuggestTransportType();
+  }
+
+  void _detectAndSuggestTransportType() {
+    final wsUriController = ref.read(wsUriControllerProvider);
+    final currentTransport = ref.read(transportTypeProvider);
+    
+    String serverUrl = wsUriController.text.trim();
+    if (serverUrl.isEmpty) return;
+    
+    // Detect transport type based on URL format
+    TransportType suggestedTransport;
+    if (serverUrl.startsWith('wss://') || serverUrl.startsWith('ws://') || serverUrl.contains('/ws')) {
+      suggestedTransport = TransportType.WS;
+      print('🔍 URL analysis: "$serverUrl" appears to be WebSocket format');
+    } else if (serverUrl.startsWith('sip://') || serverUrl.contains(':5060') || serverUrl.contains(':5061')) {
+      suggestedTransport = TransportType.TCP;
+      print('🔍 URL analysis: "$serverUrl" appears to be TCP/SIP format');
+    } else {
+      // Default to WebSocket for uncertain cases
+      suggestedTransport = TransportType.WS;
+      print('🔍 URL analysis: "$serverUrl" format unclear, defaulting to WebSocket');
+    }
+    
+    // If transport type doesn't match URL format, auto-correct it
+    if (currentTransport != suggestedTransport) {
+      print('🔧 Transport mismatch detected:');
+      print('   Current: ${currentTransport.toString()}');
+      print('   Suggested: ${suggestedTransport.toString()}');
+      print('   Auto-correcting transport type to match URL format');
+      
+      ref.read(transportTypeProvider.notifier).state = suggestedTransport;
+      
+      // Save the corrected transport type
+      _preferences.setString('transport_type', suggestedTransport.toString());
+    } else {
+      print('✅ Transport type ${currentTransport.toString()} matches URL format');
+    }
   }
 
   void _saveSettings() {
@@ -78,6 +128,7 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
     final displayNameController = ref.read(displayNameControllerProvider);
     final passwordController = ref.read(passwordControllerProvider);
     final authorizationUserController = ref.read(authorizationUserControllerProvider);
+    final selectedTransport = ref.read(transportTypeProvider);
     
     _preferences.setString('port', portController.text);
     _preferences.setString('ws_uri', wsUriController.text);
@@ -85,6 +136,7 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
     _preferences.setString('display_name', displayNameController.text);
     _preferences.setString('password', passwordController.text);
     _preferences.setString('auth_user', authorizationUserController.text);
+    _preferences.setString('transport_type', selectedTransport.toString());
   }
 
   @override
@@ -149,7 +201,7 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
     );
   }
 
-  void _register(BuildContext context) {
+  void _register(BuildContext context) async {
     final wsUriController = ref.read(wsUriControllerProvider);
     final sipUriController = ref.read(sipUriControllerProvider);
     final portController = ref.read(portControllerProvider);
@@ -161,9 +213,36 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
     
     if (wsUriController.text == '') {
       _alert(context, "WebSocket URL");
+      return;
     } else if (sipUriController.text == '') {
       _alert(context, "SIP URI");
+      return;
     }
+
+    // Check VPN connection requirement before registration
+    final connectionManager = ConnectionManager();
+    final vpnManager = connectionManager.vpnManager;
+    
+    if (!vpnManager.isConnected) {
+      print('🔐 VPN not connected - showing requirement dialog before registration');
+      
+      await showVPNRequirementDialog(
+        context,
+        customMessage: 'VPN connection is required to register to SIP server. Please connect to VPN first.',
+        onConfigureVPN: () {
+          Navigator.pushNamed(context, '/vpn-config');
+        },
+        onCancel: () {
+          print('🚫 User cancelled registration due to VPN requirement');
+        },
+      );
+      
+      // Cancel registration if VPN is not connected
+      print('❌ Registration cancelled - VPN connection required');
+      return;
+    }
+    
+    print('✅ VPN is connected - proceeding with registration');
 
     _saveSettings();
 
@@ -281,6 +360,54 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
         ),
       );
     }
+  }
+
+  Widget _buildTransportMismatchWarning() {
+    final wsUriController = ref.watch(wsUriControllerProvider);
+    final selectedTransport = ref.watch(transportTypeProvider);
+    
+    String serverUrl = wsUriController.text.trim();
+    if (serverUrl.isEmpty) return SizedBox.shrink();
+    
+    bool isMismatch = false;
+    String warningMessage = '';
+    
+    if (selectedTransport == TransportType.TCP && 
+        (serverUrl.startsWith('wss://') || serverUrl.startsWith('ws://') || serverUrl.contains('/ws'))) {
+      isMismatch = true;
+      warningMessage = 'TCP transport selected but URL appears to be WebSocket format. Consider switching to WebSocket transport.';
+    } else if (selectedTransport == TransportType.WS && 
+               (serverUrl.startsWith('sip://') || (serverUrl.contains(':5060') || serverUrl.contains(':5061')) && !serverUrl.contains('ws'))) {
+      isMismatch = true;
+      warningMessage = 'WebSocket transport selected but URL appears to be TCP format. Consider switching to TCP transport.';
+    }
+    
+    if (!isMismatch) return SizedBox.shrink();
+    
+    return Container(
+      margin: EdgeInsets.only(top: 8),
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.orange.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.warning, color: Colors.orange, size: 20),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              warningMessage,
+              style: TextStyle(
+                color: Colors.orange.shade700,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -439,7 +566,10 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
                     child: RadioListTile<TransportType>(
                       value: TransportType.TCP,
                       groupValue: selectedTransport,
-                      onChanged: (value) => ref.read(transportTypeProvider.notifier).state = value!,
+                      onChanged: (value) {
+                        ref.read(transportTypeProvider.notifier).state = value!;
+                        _saveSettings();
+                      },
                       title: Text('TCP'),
                       contentPadding: EdgeInsets.zero,
                     ),
@@ -448,14 +578,18 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
                     child: RadioListTile<TransportType>(
                       value: TransportType.WS,
                       groupValue: selectedTransport,
-                      onChanged: (value) => ref.read(transportTypeProvider.notifier).state = value!,
+                      onChanged: (value) {
+                        ref.read(transportTypeProvider.notifier).state = value!;
+                        _saveSettings();
+                      },
                       title: Text('WebSocket'),
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 24),
+              _buildTransportMismatchWarning(),
+              const SizedBox(height: 16),
             ],
             if (selectedTransport == TransportType.WS) ...[
               Text(

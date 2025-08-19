@@ -22,20 +22,23 @@ class ConnectionManager implements SipUaHelperListener {
   SipUser? _currentUser;
   late StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
   
-  // Aggressive reconnection strategy for SIP calling app
+  // Improved reconnection strategy for stability
   int _reconnectionAttempts = 0;
-  static const int _maxReconnectionAttempts = 50; // More attempts for calling app
-  static const int _baseDelaySeconds = 1; // Faster initial retry
-  static const int _maxDelaySeconds = 60; // Max 1 minute delay
+  static const int _maxReconnectionAttempts = 20; // Reduced attempts to prevent spam
+  static const int _baseDelaySeconds = 10; // Longer initial delay for stability
+  static const int _maxDelaySeconds = 300; // Max 5 minutes delay
+  static const int _minConnectionDuration = 30; // Minimum seconds to consider connection stable
   
-  // Connection state
+  // Connection state tracking
   bool _isConnecting = false;
   bool _shouldMaintainConnection = false;
   DateTime? _lastSuccessfulConnection;
+  DateTime? _connectionStartTime;
   bool _hasNetworkConnectivity = true;
   Timer? _connectionMonitorTimer;
   Timer? _connectionTimeoutTimer;
   DateTime? _lastConnectionAttempt;
+  int _consecutiveFailures = 0;
   
   // Callbacks for UI updates
   Function(RegistrationState)? onRegistrationStateChanged;
@@ -56,11 +59,110 @@ class ConnectionManager implements SipUaHelperListener {
   
   Future<void> _initializeVPN() async {
     try {
+      _logger.i('🔐 Initializing VPN Manager...');
       _vpnManager ??= VPNManager();
       await _vpnManager!.initialize();
-      _logger.i('VPN Manager initialized successfully');
+      _logger.i('✅ VPN Manager initialized successfully');
+      
+      // Configure VPN with the provided settings
+      await _configureVPNSettings();
+      _logger.i('✅ VPN configuration completed');
     } catch (e) {
-      _logger.e('VPN Manager initialization failed: $e');
+      _logger.e('❌ VPN Manager initialization failed: $e');
+      // Don't throw, just log the error
+    }
+  }
+
+  Future<void> _configureVPNSettings() async {
+    try {
+      if (_vpnManager != null) {
+        // Always configure VPN with default settings to ensure it's available
+        // Your VPN configuration
+        const String vpnConfig = '''client
+server-poll-timeout 4
+nobind
+remote 172.17.0.2 1194 udp
+remote 172.17.0.2 1194 udp
+remote 172.17.0.2 443 tcp
+remote 172.17.0.2 1194 udp
+remote 172.17.0.2 1194 udp
+remote 172.17.0.2 1194 udp
+remote 172.17.0.2 1194 udp
+remote 172.17.0.2 1194 udp
+dev tun
+dev-type tun
+remote-cert-tls server
+tls-version-min 1.2
+reneg-sec 604800
+tun-mtu 1420
+auth-user-pass
+verb 3
+push-peer-info
+
+<ca>
+-----BEGIN CERTIFICATE-----
+MIIBeDCB/6ADAgECAgRopCUBMAoGCCqGSM49BAMCMBUxEzARBgNVBAMMCk9wZW5W
+UE4gQ0EwHhcNMjUwODE4MDcxNzIxWhcNMzUwODE3MDcxNzIxWjAVMRMwEQYDVQQD
+DApPcGVuVlBOIENBMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAERwio5P+58s7hBqNm
+rRQq3jZWePPy6xRQ/2Z4zxlD+3mYU0d0YYvb2T6usZ/Fbjf6lQki79qdL1Y1IGYA
+PxuDchsyqZxx6s9hbYPYfuGKLdK2pnioIfs4z9z8fRcpLSu2oyAwHjAPBgNVHRMB
+Af8EBTADAQH/MAsGA1UdDwQEAwIBBjAKBggqhkjOPQQDAgNoADBlAjEA946I2iu6
+btTJsqlJfpG954Hn0hUwrU2AubPuu/WWq3x6RgvAVCNEFwpCVpSTwE7MAjBUSEgV
+HjnHK9UK/A/pwHQgkIZgIoMrHmn4DZD5uSmhDlRRJLB0O4UwAYhw1aFWWA0=
+-----END CERTIFICATE-----
+</ca>
+<cert>
+-----BEGIN CERTIFICATE-----
+MIIBnzCCASagAwIBAgIIeEf3MLQNtpMwCgYIKoZIzj0EAwIwFTETMBEGA1UEAwwK
+T3BlblZQTiBDQTAeFw0yNTA4MTgxMDIzNTJaFw0zNTA4MTcxMDIzNTJaMBMxETAP
+BgNVBAMMCGludGlzaGFyMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEwt+tPL+wivoI
+OVXYXAhIq8UILSk+gnq4TGr9eNbxt4wtLlOd1vIIxhspWQkJa4pidzXSLKUZ0ZWQ
+7bfRPji8k2M1yTckQCM3pJMNzCgImcvKf0oMcTHzXIf6ukffQxzCo0UwQzAMBgNV
+HRMBAf8EAjAAMAsGA1UdDwQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAjARBglg
+hkgBhvhCAQEEBAMCB4AwCgYIKoZIzj0EAwIDZwAwZAIwYqyRPMtrTDAlJv+ENJ5j
+1MF7GWO709jmF5zXmpH+ngfa2U8ZFK+Q/iJNEQrR5x3TAjAMHwHSjycyU3Z/DLH7
+KBVcSGfyo39j7EogW0gwLhLfCy1XjDj8ixgfrkBJR5ACKM8=
+-----END CERTIFICATE-----
+</cert>
+<key>
+-----BEGIN PRIVATE KEY-----
+MIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDCGdYrbfb2X2+g0dWkF
+Qn3gIKNQL5n79HWT0+avA4gHZ/nt1Pfsl3/VU93cdJkfCL6hZANiAATC3608v7CK
++gg5VdhcCEirxQgtKT6CerhMav141vG3jC0uU53W8gjGGylZCQlrimJ3NdIspRnR
+lZDtt9E+OLyTYzXJNyRAIzekkw3MKAiZy8p/SgxxMfNch/q6R99DHMI=
+-----END PRIVATE KEY-----
+</key>
+<tls-crypt-v2>
+-----BEGIN OpenVPN tls-crypt-v2 client key-----
+Q+qYsAOw+yINhlZxS8dKNQkCCsGC7e49sKmEC4mPpNOz2zCK9l7X08UuE6TnhD1h
+B/0Uwo/5mIfXdDMegUxC73JEOfWF+clZ3aSrtUGgv1j5xs/GlIjkxqR63Ve3qt4I
+QFBdv7IHodKCVEaWROiMdhSwISpO74kUjk+auaRBmJR8dhEIJDBPMd9yhOI238FY
+Vp4BH10OCdrEunodQdqp6jDMkYMToW5Q4ZM4/mI1Y4H0f1zbbBeDLi76RPAo2ifu
+x/Cz9cZeNcG3r+1LM7+YeCK/2M2VCtp0M6rrquMzA1LYdIiAleiUTtFnpPKQ6Gec
+iV3jsXMcfq/mxC5sCidxIK12kcTVYxJYmWHOOlmC/TpOEPU93oX+f7T+WRIb+taf
+qg5XPLE9DIsHG2k4BAwqpQiJ4OxsCHMhWipzobnXxD5MzewFiMs4LHSQYDYZ9YlU
++i2XFgFqURgRXUpNx3Y3ORYhgpSJGWpOZYmjqr6EHE8t9RyyKJAyJRdV3xc7A17Z
+2Ruz1aARDk+6E9psZK0HZuTIKLlyMHba9ZL7VWCUjWplGlF4FUXDR7RdmhyHIELl
+KCf216h5/+a6HZLrmk5ViDi5fJo+T2nhf7r97L+fFD0wBqQvicjmhLDNMw8w0m+0
+eDSHhxeRCmuF9nIklHEvarC3eFQetiNTdUfQr4o0Q16qxuDi9FA52vRbKmu7gwgP
+z4fB2SFUiE0i9Ujch4Gs/Tk3kzqwmX+RfdsMLqYX4WKqPYC1QM4coSUBrRWwa96K
+shWr8WQLs62E90vQhhZbhAB+PW6GhwkBWQ==
+-----END OpenVPN tls-crypt-v2 client key-----
+</tls-crypt-v2>''';
+        
+        await _vpnManager!.configureVPN(
+          serverAddress: '10.209.99.108',
+          username: 'intishar',
+          password: 'ibos@123',
+          customConfig: vpnConfig,
+        );
+        
+        // Enable auto-connect by default
+        _vpnManager!.enableAutoConnect(true);
+        _logger.i('VPN configured with custom settings and auto-connect enabled');
+      }
+    } catch (e) {
+      _logger.e('VPN configuration failed: $e');
     }
   }
 
@@ -178,7 +280,9 @@ class ConnectionManager implements SipUaHelperListener {
       
       _vpnManager!.enableAutoConnect(enableAutoConnect);
       
-      _logger.i('VPN configuration completed');
+      // Save settings immediately for persistence
+      await _vpnManager!.saveSettings();
+      _logger.i('VPN configuration completed and settings saved');
     } catch (e) {
       _logger.e('VPN configuration failed: $e');
       rethrow;
@@ -207,6 +311,53 @@ class ConnectionManager implements SipUaHelperListener {
     }
   }
 
+  /// Auto-connect VPN before SIP connection if configured
+  Future<void> _autoConnectVPNFirst() async {
+    try {
+      _logger.i('🔐 Auto-connecting VPN before SIP connection...');
+      
+      // Ensure VPN manager is initialized
+      if (_vpnManager == null) {
+        _logger.i('🔐 Initializing VPN manager for auto-connect...');
+        await _initializeVPN();
+      }
+      
+      if (_vpnManager == null) {
+        _logger.w('❌ VPN manager not available for auto-connect');
+        return;
+      }
+      
+      // Check if VPN should auto-connect
+      if (!_vpnManager!.shouldAutoConnect) {
+        _logger.i('ℹ️ VPN auto-connect disabled - skipping VPN connection');
+        return;
+      }
+      
+      // Check if VPN is already connected
+      if (_vpnManager!.isConnected) {
+        _logger.i('✅ VPN already connected - no need to auto-connect');
+        return;
+      }
+      
+      // Check if VPN is configured
+      if (!_vpnManager!.isConfigured) {
+        _logger.w('⚠️ VPN not configured - cannot auto-connect');
+        return;
+      }
+      
+      _logger.i('🔐 Starting VPN auto-connect...');
+      final success = await _vpnManager!.connect();
+      
+      if (success) {
+        _logger.i('✅ VPN auto-connect successful');
+      } else {
+        _logger.w('❌ VPN auto-connect failed');
+      }
+    } catch (e) {
+      _logger.e('❌ VPN auto-connect error: $e');
+    }
+  }
+
   /// Check if connection is active
   bool get isConnected => _sipHelper.registered;
   
@@ -218,10 +369,68 @@ class ConnectionManager implements SipUaHelperListener {
     _vpnManager ??= VPNManager();
     return _vpnManager!;
   }
+
+  /// Check if VPN is connected and required for SIP operations
+  bool get isVPNConnectedForSIP {
+    final vpn = vpnManager;
+    return vpn.isConnected;
+  }
+
+  /// Suggest optimal transport type based on server URL
+  TransportType suggestTransportType(String serverUrl) {
+    if (serverUrl.startsWith('ws://') || serverUrl.startsWith('wss://')) {
+      return TransportType.WS;
+    } else if (serverUrl.startsWith('sips://') || serverUrl.contains(':5061')) {
+      return TransportType.TCP; // Use TCP for TLS (secure TCP)
+    } else if (serverUrl.startsWith('sip://') || serverUrl.contains(':5060')) {
+      return TransportType.TCP;
+    } else {
+      // Default based on compatibility
+      return TransportType.WS; // WebSocket is most compatible
+    }
+  }
+
+  /// Validate transport configuration
+  Map<String, dynamic> validateTransportConfig(String serverUrl, TransportType transportType) {
+    final suggested = suggestTransportType(serverUrl);
+    final isOptimal = suggested == transportType;
+    
+    String recommendation;
+    if (isOptimal) {
+      recommendation = 'Transport type matches URL format - optimal configuration';
+    } else {
+      recommendation = 'URL format suggests $suggested, but $transportType is selected. This may work if server supports both.';
+    }
+    
+    // Additional validation based on transport type
+    List<String> warnings = [];
+    if (transportType == TransportType.WS) {
+      if (!serverUrl.startsWith('ws://') && !serverUrl.startsWith('wss://')) {
+        warnings.add('WebSocket transport requires URL starting with ws:// or wss://');
+      }
+    } else if (transportType == TransportType.TCP) {
+      if (serverUrl.startsWith('ws://') || serverUrl.startsWith('wss://')) {
+        warnings.add('TCP transport typically uses sip:// URLs or host:port format');
+      }
+    }
+    
+    return {
+      'isOptimal': isOptimal,
+      'currentTransport': transportType,
+      'suggestedTransport': suggested,
+      'serverUrl': serverUrl,
+      'recommendation': recommendation,
+      'warnings': warnings,
+    };
+  }
   
   /// Get comprehensive connection status for monitoring
   Map<String, dynamic> getConnectionStatus() {
     final now = DateTime.now();
+    final connectionDuration = _connectionStartTime != null 
+        ? now.difference(_connectionStartTime!).inSeconds 
+        : 0;
+    
     return {
       'isConnected': _sipHelper.registered,
       'shouldMaintainConnection': _shouldMaintainConnection,
@@ -229,6 +438,9 @@ class ConnectionManager implements SipUaHelperListener {
       'hasNetworkConnectivity': _hasNetworkConnectivity,
       'reconnectionAttempts': _reconnectionAttempts,
       'maxReconnectionAttempts': _maxReconnectionAttempts,
+      'consecutiveFailures': _consecutiveFailures,
+      'connectionDuration': connectionDuration,
+      'connectionStable': connectionDuration >= _minConnectionDuration,
       'lastSuccessfulConnection': _lastSuccessfulConnection?.toIso8601String(),
       'lastConnectionAttempt': _lastConnectionAttempt?.toIso8601String(),
       'secondsSinceLastConnection': _lastSuccessfulConnection != null 
@@ -239,6 +451,7 @@ class ConnectionManager implements SipUaHelperListener {
           : null,
       'hasCurrentUser': _currentUser != null,
       'currentUserName': _currentUser?.authUser,
+      'vpnConnected': _vpnManager?.isConnected ?? false,
     };
   }
   
@@ -290,16 +503,13 @@ class ConnectionManager implements SipUaHelperListener {
         await Future.delayed(Duration(milliseconds: 500)); // Short delay
       }
       
-      // Step 1: Connect VPN if configured and enabled
-      if (_vpnManager?.isConfigured == true && _vpnManager?.shouldAutoConnect == true) {
-        _logger.i('🔐 VPN auto-connect enabled, connecting VPN first...');
-        final vpnConnected = await _connectVPN();
-        if (!vpnConnected) {
-          throw Exception('VPN connection failed - cannot establish secure SIP connection');
-        }
-      } else {
-        _logger.i('🔍 VPN not configured or auto-connect disabled, proceeding with direct SIP connection');
+      // Step 1: ALWAYS Connect VPN first (REQUIRED for SIP connection)
+      _logger.i('🔐 VPN connection is REQUIRED before SIP connection, connecting VPN first...');
+      final vpnConnected = await _connectVPN();
+      if (!vpnConnected) {
+        throw Exception('VPN connection failed - cannot establish secure SIP connection');
       }
+      _logger.i('✅ VPN connected successfully, proceeding with SIP connection');
       
       // Step 2: Connect SIP
       await _connect(_currentUser!);
@@ -342,32 +552,56 @@ class ConnectionManager implements SipUaHelperListener {
     try {
       _logger.i('🔐 Attempting VPN connection...');
       
-      // Ensure VPN manager is initialized
-      _vpnManager ??= VPNManager();
+      // Ensure VPN manager is properly initialized
+      if (_vpnManager == null) {
+        _logger.i('🔐 VPN Manager not initialized, initializing now...');
+        await _initializeVPN();
+      }
       
+      // Check if VPN manager is still null after initialization
+      if (_vpnManager == null) {
+        _logger.e('❌ VPN Manager failed to initialize');
+        return false;
+      }
+      
+      // Check if already connected
       if (_vpnManager!.isConnected) {
         _logger.i('✅ VPN already connected');
         return true;
       }
       
+      // Check if VPN is configured
+      if (!_vpnManager!.isConfigured) {
+        _logger.e('❌ VPN not configured');
+        return false;
+      }
+      
+      _logger.i('🔐 Starting VPN connection...');
       final success = await _vpnManager!.connect();
+      
       if (success) {
         // Wait for VPN to establish connection
+        _logger.i('🔐 Waiting for VPN connection to establish...');
         int attempts = 0;
-        while (!_vpnManager!.isConnected && attempts < 30) { // Wait up to 15 seconds
+        const maxAttempts = 60; // Wait up to 30 seconds
+        
+        while (!_vpnManager!.isConnected && attempts < maxAttempts) {
           await Future.delayed(Duration(milliseconds: 500));
           attempts++;
+          if (attempts % 10 == 0) {
+            _logger.i('🔐 VPN connection attempt ${attempts ~/ 2} seconds...');
+          }
         }
         
         if (_vpnManager!.isConnected) {
           _logger.i('✅ VPN connected successfully');
           return true;
         } else {
-          _logger.e('❌ VPN connection timeout');
+          _logger.e('❌ VPN connection timeout after ${maxAttempts ~/ 2} seconds');
           return false;
         }
       } else {
-        _logger.e('❌ VPN connection failed');
+        _logger.e('❌ VPN connection initiation failed');
         return false;
       }
     } catch (e) {
@@ -415,13 +649,94 @@ class ConnectionManager implements SipUaHelperListener {
     _logger.i('   Username: $username');
     
     // Configure settings with robust connection parameters
-    settings.webSocketUrl = user.wsUrl ?? '';
-    settings.webSocketSettings.extraHeaders = user.wsExtraHeaders ?? {};
-    settings.webSocketSettings.allowBadCertificate = true;
-    settings.tcpSocketSettings.allowBadCertificate = true;
-    settings.transportType = user.selectedTransport;
+    final transportType = user.selectedTransport;
+    final serverUrl = user.wsUrl ?? '';
+    
+    _logger.i('🚀 Transport configuration:');
+    _logger.i('   Transport Type: $transportType');
+    _logger.i('   Server URL: $serverUrl');
+    
+    // Validate transport configuration (informational only)
+    final validation = validateTransportConfig(serverUrl, transportType);
+    _logger.i('📋 Transport Configuration Analysis:');
+    _logger.i('   Selected: ${validation['currentTransport']}');
+    _logger.i('   ${validation['recommendation']}');
+    
+    final warnings = validation['warnings'] as List<String>;
+    if (warnings.isNotEmpty) {
+      _logger.w('⚠️ Configuration Notes:');
+      for (final warning in warnings) {
+        _logger.w('   - $warning');
+      }
+    }
+    
+    // Configure transport based on user selection (no auto-correction)
+    settings.transportType = transportType;
+    
+    if (transportType == TransportType.WS) {
+      // WebSocket Transport Configuration
+      _logger.i('🔌 Configuring WebSocket transport...');
+      settings.webSocketUrl = serverUrl;
+      settings.webSocketSettings.extraHeaders = user.wsExtraHeaders ?? {};
+      settings.webSocketSettings.allowBadCertificate = true;
+      
+      // Validate WebSocket URL format
+      if (!serverUrl.startsWith('ws://') && !serverUrl.startsWith('wss://')) {
+        _logger.w('⚠️ WebSocket transport selected but URL doesn\'t start with ws:// or wss://');
+        _logger.w('   Current URL: $serverUrl');
+        _logger.w('   Expected format: wss://server:port/path or ws://server:port/path');
+      }
+    } else {
+      // TCP Transport Configuration  
+      _logger.i('🔌 Configuring TCP transport...');
+      settings.tcpSocketSettings.allowBadCertificate = true;
+      
+      // For TCP, we need host and port (not WebSocket URL)
+      if (serverUrl.isNotEmpty) {
+        try {
+          String hostUrl = serverUrl;
+          
+          // Handle different URL formats for TCP
+          if (serverUrl.startsWith('sip://') || serverUrl.startsWith('sips://')) {
+            hostUrl = serverUrl.replaceFirst('sip://', '').replaceFirst('sips://', '');
+          } else if (serverUrl.startsWith('ws://') || serverUrl.startsWith('wss://')) {
+            // Extract host:port from WebSocket URL for TCP use
+            final uri = Uri.parse(serverUrl);
+            hostUrl = '${uri.host}:${uri.port}';
+            _logger.w('⚠️ TCP transport selected but WebSocket URL provided');
+            _logger.w('   Extracting host:port from WebSocket URL: $hostUrl');
+          }
+          
+          // Parse host and port
+          if (hostUrl.contains(':')) {
+            final parts = hostUrl.split(':');
+            settings.host = parts[0];
+            if (parts.length > 1 && parts[1].isNotEmpty) {
+              // Remove path if present (e.g., "8089/ws" -> "8089")
+              final portPart = parts[1].split('/')[0];
+              settings.port = portPart;
+            }
+          } else {
+            settings.host = hostUrl;
+            // Use default ports for TCP
+            if (serverUrl.startsWith('sips://')) {
+              settings.port = '5061'; // Secure SIP
+            } else {
+              settings.port = '5060'; // Standard SIP
+            }
+          }
+        } catch (e) {
+          _logger.w('Failed to parse TCP server URL: $e');
+          _logger.w('Please use format: server:port or sip://server:port');
+        }
+      } else {
+        _logger.w('⚠️ TCP transport selected but no server URL provided');
+        _logger.w('   Please provide server URL in format: server:port or sip://server:port');
+      }
+    }
+    
+    // Set common settings
     settings.uri = properSipUri;
-    settings.host = domain;
     settings.registrarServer = domain;
     settings.realm = null;
     settings.authorizationUser = username;
@@ -430,21 +745,86 @@ class ConnectionManager implements SipUaHelperListener {
     settings.userAgent = 'Flutter SIP Client v1.0.0';
     settings.dtmfMode = DtmfMode.RFC2833;
     settings.register = true;
-    settings.register_expires = 300; // Shorter expiry for more frequent registration refreshes
+    settings.register_expires = 3600; // Longer expiry to reduce server load and reconnections
     settings.contact_uri = null;
     
-    if (user.selectedTransport != TransportType.WS && user.port.isNotEmpty) {
-      settings.port = user.port;
-      _logger.i('   Port: ${user.port}');
+    // Finalize host settings based on transport type
+    if (settings.transportType == TransportType.WS) {
+      // For WebSocket, host is derived from domain (for SIP URI)
+      if (settings.host == null || settings.host!.isEmpty) {
+        settings.host = domain;
+      }
+    } else {
+      // For TCP, host should be set above from URL parsing, or use domain as fallback
+      if (settings.host == null || settings.host!.isEmpty) {
+        settings.host = domain;
+        _logger.w('⚠️ No host extracted from URL, using domain: $domain');
+      }
+      
+      // Override port if user provided specific port
+      if (user.port.isNotEmpty) {
+        settings.port = user.port;
+        _logger.i('   Using user-provided port: ${user.port}');
+      }
+      
+      // Ensure we have a port for TCP
+      if (settings.port == null || settings.port!.isEmpty) {
+        settings.port = '5060'; // Default SIP port
+        _logger.w('⚠️ No port specified for TCP, using default: 5060');
+      }
     }
     
-    _logger.i('🚀 Starting SIP connection with URI: ${settings.uri} via ${settings.webSocketUrl}');
+    _logger.i('📋 Final connection settings:');
+    _logger.i('   Transport: ${settings.transportType}');
+    _logger.i('   Host: ${settings.host}');
+    _logger.i('   Port: ${settings.port ?? 'default'}');
+    _logger.i('   WebSocket URL: ${settings.webSocketUrl ?? 'none'}');
+    
+    final connectionEndpoint = settings.transportType == TransportType.WS 
+        ? settings.webSocketUrl 
+        : '${settings.host}:${settings.port ?? 'default'}';
+    _logger.i('🚀 Starting SIP connection with URI: ${settings.uri} via $connectionEndpoint');
     
     try {
       await _sipHelper.start(settings);
       _logger.i('✅ SIP helper started successfully');
     } catch (e) {
       _logger.e('❌ SIP helper start failed: $e');
+      
+      // Specific handling for different transport errors
+      final errorMsg = e.toString().toLowerCase();
+      
+      if (settings.transportType == TransportType.TCP) {
+        if (errorMsg.contains('tcp') || errorMsg.contains('socket')) {
+          _logger.e('🔧 TCP Connection Issue:');
+          _logger.e('   Current config: ${settings.host}:${settings.port}');
+          _logger.e('   - Verify server supports TCP connections on this port');
+          _logger.e('   - Check firewall/network connectivity');
+          _logger.e('   - Ensure host and port are correct');
+          _logger.e('   - Try telnet ${settings.host} ${settings.port} to test connectivity');
+          
+          if (serverUrl.startsWith('wss://') || serverUrl.startsWith('ws://')) {
+            _logger.e('💡 NOTE: Server URL suggests WebSocket, but TCP transport selected');
+            _logger.e('    If server only supports WebSocket, change transport type to WebSocket');
+          }
+        }
+      } else if (settings.transportType == TransportType.WS) {
+        if (errorMsg.contains('websocket') || errorMsg.contains('handshake')) {
+          _logger.e('🔧 WebSocket Connection Issue:');
+          _logger.e('   Current URL: ${settings.webSocketUrl}');
+          _logger.e('   - Verify WebSocket URL is correct');
+          _logger.e('   - Check if server supports WebSocket connections');
+          _logger.e('   - Verify SSL/TLS settings for wss:// URLs');
+          _logger.e('   - Check server WebSocket path (e.g., /ws)');
+        }
+      }
+      
+      // General connectivity suggestions
+      _logger.e('🔍 General troubleshooting:');
+      _logger.e('   - Verify VPN is connected');
+      _logger.e('   - Check network connectivity');
+      _logger.e('   - Confirm server credentials are correct');
+      
       rethrow;
     }
   }
@@ -480,10 +860,22 @@ class ConnectionManager implements SipUaHelperListener {
   }
 
   int _calculateBackoffDelay(int attempt) {
-    // Exponential backoff: 2^attempt * base + random jitter
+    // Base exponential backoff
     int exponentialDelay = (pow(2, attempt) * _baseDelaySeconds).round();
-    int jitter = Random().nextInt(5); // 0-4 seconds of jitter
-    int totalDelay = exponentialDelay + jitter;
+    
+    // Add stability penalty for consecutive failures
+    int stabilityPenalty = _consecutiveFailures * 30; // 30 seconds per consecutive failure
+    
+    // Add jitter to prevent thundering herd
+    int jitter = Random().nextInt(10); // 0-9 seconds of jitter
+    
+    int totalDelay = exponentialDelay + stabilityPenalty + jitter;
+    
+    _logger.i('🔄 Reconnection delay calculation:');
+    _logger.i('   Base delay: ${exponentialDelay}s');
+    _logger.i('   Stability penalty: ${stabilityPenalty}s ($_consecutiveFailures failures)');
+    _logger.i('   Jitter: ${jitter}s');
+    _logger.i('   Total delay: ${totalDelay}s');
     
     return totalDelay.clamp(_baseDelaySeconds, _maxDelaySeconds);
   }
@@ -491,16 +883,22 @@ class ConnectionManager implements SipUaHelperListener {
   void _startHeartbeat() {
     _stopHeartbeat();
     
-    // More frequent health checks for SIP calling app
-    _heartbeatTimer = Timer.periodic(Duration(seconds: 30), (timer) {
+    // Balanced health checks to avoid connection spam
+    _heartbeatTimer = Timer.periodic(Duration(seconds: 120), (timer) {
       if (_shouldMaintainConnection) {
         _logger.d('🔍 Connection health check - Registered: ${_sipHelper.registered}, Connecting: $_isConnecting');
         _checkConnectionHealth();
         
-        // Ensure we're always connected
+        // Only reconnect if we haven't been connected for a significant time
         if (!_sipHelper.registered && !_isConnecting) {
-          _logger.w('❌ Not registered during health check - attempting reconnection');
-          _connectWithRetry();
+          final timeSinceLastConnection = _lastSuccessfulConnection != null 
+              ? DateTime.now().difference(_lastSuccessfulConnection!).inMinutes
+              : 999;
+          
+          if (timeSinceLastConnection > 2) { // Only if disconnected for more than 2 minutes
+            _logger.w('❌ Not registered for $timeSinceLastConnection minutes - attempting reconnection');
+            _connectWithRetry();
+          }
         }
       }
     });
@@ -512,8 +910,8 @@ class ConnectionManager implements SipUaHelperListener {
   void _startConnectionMonitor() {
     _stopConnectionMonitor();
     
-    // Ultra-frequent monitoring for critical SIP calling app
-    _connectionMonitorTimer = Timer.periodic(Duration(seconds: 10), (timer) {
+    // Balanced monitoring to prevent connection spam
+    _connectionMonitorTimer = Timer.periodic(Duration(seconds: 60), (timer) {
       if (_shouldMaintainConnection) {
         _performCriticalConnectionCheck();
       }
@@ -612,6 +1010,10 @@ class ConnectionManager implements SipUaHelperListener {
         Future.delayed(Duration(seconds: 3), () async {
           if (_shouldMaintainConnection == false) { // Only connect if not already started
             _logger.i('ConnectionManager: Starting delayed auto-connect...');
+            
+            // Auto-connect VPN first, then SIP
+            await _autoConnectVPNFirst();
+            
             await startPersistentConnection(sipUser);
           } else {
             _logger.i('ConnectionManager: Connection already managed, skipping auto-connect');
@@ -633,14 +1035,38 @@ class ConnectionManager implements SipUaHelperListener {
       case RegistrationStateEnum.REGISTERED:
         _logger.i('✅ Successfully registered to SIP server!');
         _logger.i('🎉 Connection is now active and ready for calls');
+        
+        // Track successful connection
+        final now = DateTime.now();
+        _lastSuccessfulConnection = now;
+        _connectionStartTime = now;
         _reconnectionAttempts = 0; // Reset on successful registration
-        _lastSuccessfulConnection = DateTime.now();
+        _consecutiveFailures = 0; // Reset failure counter
         _isConnecting = false; // Clear connecting flag
+        
         BackgroundService.startService();
         break;
         
       case RegistrationStateEnum.UNREGISTERED:
         _logger.w('🔌 Unregistered from SIP server');
+        
+        // Check connection stability before reconnecting
+        if (_connectionStartTime != null) {
+          final connectionDuration = DateTime.now().difference(_connectionStartTime!).inSeconds;
+          if (connectionDuration < _minConnectionDuration) {
+            _consecutiveFailures++;
+            _logger.w('⚠️ Connection was unstable (lasted only ${connectionDuration}s). Consecutive failures: $_consecutiveFailures');
+            
+            // If we have many consecutive short-lived connections, increase delay significantly
+            if (_consecutiveFailures >= 3) {
+              _logger.w('🚨 Multiple consecutive unstable connections detected. Using extended delay.');
+            }
+          } else {
+            _logger.i('ℹ️ Connection was stable (lasted ${connectionDuration}s). Resetting failure counter.');
+            _consecutiveFailures = 0;
+          }
+        }
+        
         if (_shouldMaintainConnection && !_isConnecting) {
           _logger.i('🔄 Auto-reconnection enabled, scheduling reconnection...');
           _scheduleReconnection();
@@ -673,8 +1099,14 @@ class ConnectionManager implements SipUaHelperListener {
     switch (state.state) {
       case TransportStateEnum.DISCONNECTED:
         _logger.w('Transport disconnected. Checking if reconnection needed...');
-        if (_shouldMaintainConnection && !_isConnecting) {
+        
+        // Only schedule reconnection if we don't have a reconnection timer already running
+        if (_shouldMaintainConnection && !_isConnecting && _reconnectionTimer == null) {
+          // Add a small delay to avoid immediate reconnection on transport disconnect
+          _logger.i('🔄 Scheduling reconnection after transport disconnect...');
           _scheduleReconnection();
+        } else if (_reconnectionTimer != null) {
+          _logger.i('ℹ️ Reconnection already scheduled, skipping duplicate');
         }
         break;
         
@@ -719,5 +1151,6 @@ class ConnectionManager implements SipUaHelperListener {
     _stopHeartbeat();
     _connectivitySubscription.cancel();
     _sipHelper.removeSipUaHelperListener(this);
+    _vpnManager?.dispose();
   }
 }

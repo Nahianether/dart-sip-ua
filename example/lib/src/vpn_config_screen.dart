@@ -43,14 +43,18 @@ class _VPNConfigScreenState extends ConsumerState<VPNConfigScreen> {
       final info = vpnManager.getConnectionInfo();
       
       setState(() {
-        _serverController.text = info['serverAddress'] ?? '';
-        _usernameController.text = info['username'] ?? '';
+        _serverController.text = info['serverAddress'] ?? '10.209.99.108';
+        _usernameController.text = info['username'] ?? 'intishar';
+        _passwordController.text = 'ibos@123'; // Set default password
         _autoConnect = info['shouldAutoConnect'] ?? true;
       });
     } catch (e) {
       print('Error loading VPN config: $e');
       // Set defaults if loading fails
       setState(() {
+        _serverController.text = '10.209.99.108';
+        _usernameController.text = 'intishar';
+        _passwordController.text = 'ibos@123';
         _autoConnect = true;
       });
     }
@@ -178,7 +182,7 @@ class _VPNConfigScreenState extends ConsumerState<VPNConfigScreen> {
                     Text(
                       'Configure VPN settings for secure SIP connection. The VPN will connect automatically before establishing SIP connection.',
                       style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.textTheme.bodyMedium?.color?.withOpacity(0.7),
+                        color: theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.7),
                       ),
                     ),
                   ],
@@ -322,7 +326,7 @@ class _VPNConfigScreenState extends ConsumerState<VPNConfigScreen> {
             
             // Help text
             Card(
-              color: Colors.blue.withOpacity(0.1),
+              color: Colors.blue.withValues(alpha: 0.1),
               child: Padding(
                 padding: EdgeInsets.all(16),
                 child: Column(

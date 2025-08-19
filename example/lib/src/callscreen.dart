@@ -749,8 +749,11 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
 
     switch (_state) {
       case CallStateEnum.NONE:
+      case CallStateEnum.CALL_INITIATION:
       case CallStateEnum.CONNECTING:
+      case CallStateEnum.PROGRESS:
         if (direction == Direction.incoming) {
+          // Incoming call - show Accept and Decline buttons
           basicActions.add(AnimatedScale(
             scale: 1.0,
             duration: Duration(milliseconds: 300),
@@ -764,9 +767,15 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
           basicActions.add(AnimatedScale(
             scale: 1.0,
             duration: Duration(milliseconds: 300),
-            child: hangupBtn,
+            child: ActionButton(
+              title: "Decline",
+              fillColor: Colors.red.shade600,
+              icon: Icons.call_end,
+              onPressed: () => _handleHangup(),
+            ),
           ));
         } else {
+          // Outgoing call - show only End Call button
           basicActions.add(AnimatedScale(
             scale: 1.0,
             duration: Duration(milliseconds: 300),
@@ -781,7 +790,7 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
           advanceActions.add(AnimatedSwitcher(
             duration: Duration(milliseconds: 250),
             child: ActionButton(
-              key: ValueKey('mute_${_audioMuted}'),
+              key: ValueKey('mute_$_audioMuted'),
               title: _audioMuted ? 'Unmute' : 'Mute',
               icon: _audioMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
               checked: _audioMuted,
@@ -819,7 +828,7 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
             advanceActions.add(AnimatedSwitcher(
               duration: Duration(milliseconds: 250),
               child: ActionButton(
-                key: ValueKey('speaker_${_speakerOn}'),
+                key: ValueKey('speaker_$_speakerOn'),
                 title: _speakerOn ? 'Speaker Off' : 'Speaker On',
                 icon: _speakerOn ? Icons.volume_up_rounded : Icons.volume_down_rounded,
                 checked: _speakerOn,
@@ -842,7 +851,7 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
             advanceActions.add(AnimatedSwitcher(
               duration: Duration(milliseconds: 250),
               child: ActionButton(
-                key: ValueKey('video_${_videoMuted}'),
+                key: ValueKey('video_$_videoMuted'),
                 title: _videoMuted ? "Camera On" : 'Camera Off',
                 icon: _videoMuted ? Icons.videocam_rounded : Icons.videocam_off_rounded,
                 checked: _videoMuted,
@@ -856,7 +865,7 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
           basicActions.add(AnimatedSwitcher(
             duration: Duration(milliseconds: 250),
             child: ActionButton(
-              key: ValueKey('hold_${_hold}'),
+              key: ValueKey('hold_$_hold'),
               title: _hold ? 'Resume' : 'Hold',
               icon: _hold ? Icons.play_arrow_rounded : Icons.pause_rounded,
               checked: _hold,
@@ -904,9 +913,6 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
             },
           ),
         ));
-        break;
-      case CallStateEnum.PROGRESS:
-        basicActions.add(hangupBtn);
         break;
       default:
         print('Other state => $_state');
@@ -1085,29 +1091,81 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
                       ),
                     ),
                   ),
-                  Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(6),
-                      child: Text(
-                        '$remoteIdentity',
-                        style: TextStyle(fontSize: 18, color: textColor),
+                  // Call state subtitle
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                    child: Text(
+                      _getCallStateSubtitle(),
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: textColor?.withValues(alpha: 0.8),
+                        fontWeight: FontWeight.w500,
                       ),
+                      textAlign: TextAlign.center,
                     ),
                   ),
-                  Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(6),
+                  
+                  // Remote identity with better formatting
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    margin: const EdgeInsets.symmetric(horizontal: 40),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      remoteIdentity ?? 'Unknown',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                        color: textColor,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  
+                  SizedBox(height: 16),
+                  
+                  // Timer - only show when call is confirmed
+                  if (_callConfirmed) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
                       child: ValueListenableBuilder<String>(
                         valueListenable: _timeLabel,
                         builder: (context, value, child) {
                           return Text(
                             _timeLabel.value,
-                            style: TextStyle(fontSize: 14, color: textColor),
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.green.shade700,
+                            ),
                           );
                         },
                       ),
                     ),
-                  )
+                  ] else ...[
+                    // Show call state for non-confirmed calls
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: _getCallStateColor().withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        _getCallStateDisplayText(),
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: _getCallStateColor(),
+                        ),
+                      ),
+                    ),
+                  ]
                 ],
               ),
             ),
@@ -1123,11 +1181,13 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
 
   String _getCallStateTitle() {
     switch (_state) {
+      case CallStateEnum.CALL_INITIATION:
       case CallStateEnum.CONNECTING:
         return direction == Direction.incoming ? 'Incoming Call' : 'Calling...';
       case CallStateEnum.PROGRESS:
-        return 'Connecting...';
+        return direction == Direction.incoming ? 'Ringing...' : 'Connecting...';
       case CallStateEnum.ACCEPTED:
+        return 'Call Connected';
       case CallStateEnum.CONFIRMED:
         return _hold ? 'Call on Hold' : 'Call Active';
       case CallStateEnum.ENDED:
@@ -1136,6 +1196,65 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
         return 'Call Failed';
       default:
         return 'Call';
+    }
+  }
+
+  String _getCallStateSubtitle() {
+    switch (_state) {
+      case CallStateEnum.CALL_INITIATION:
+      case CallStateEnum.CONNECTING:
+        return direction == Direction.incoming ? 'Incoming call from' : 'Calling';
+      case CallStateEnum.PROGRESS:
+        return direction == Direction.incoming ? 'Call ringing' : 'Connecting to';
+      case CallStateEnum.ACCEPTED:
+        return 'Call connected with';
+      case CallStateEnum.CONFIRMED:
+        return _hold ? 'Call on hold with' : 'In call with';
+      case CallStateEnum.ENDED:
+        return 'Call ended with';
+      case CallStateEnum.FAILED:
+        return 'Call failed to';
+      default:
+        return '';
+    }
+  }
+
+  String _getCallStateDisplayText() {
+    switch (_state) {
+      case CallStateEnum.CALL_INITIATION:
+      case CallStateEnum.CONNECTING:
+        return direction == Direction.incoming ? 'Incoming...' : 'Calling...';
+      case CallStateEnum.PROGRESS:
+        return direction == Direction.incoming ? 'Ringing...' : 'Ringing...';
+      case CallStateEnum.ACCEPTED:
+        return 'Connected';
+      case CallStateEnum.CONFIRMED:
+        return _hold ? 'On Hold' : 'Active';
+      case CallStateEnum.ENDED:
+        return 'Ended';
+      case CallStateEnum.FAILED:
+        return 'Failed';
+      default:
+        return 'Unknown';
+    }
+  }
+
+  Color _getCallStateColor() {
+    switch (_state) {
+      case CallStateEnum.CALL_INITIATION:
+      case CallStateEnum.CONNECTING:
+        return direction == Direction.incoming ? Colors.blue : Colors.orange;
+      case CallStateEnum.PROGRESS:
+        return Colors.blue;
+      case CallStateEnum.ACCEPTED:
+      case CallStateEnum.CONFIRMED:
+        return _hold ? Colors.orange : Colors.green;
+      case CallStateEnum.ENDED:
+        return Colors.grey;
+      case CallStateEnum.FAILED:
+        return Colors.red;
+      default:
+        return Colors.grey;
     }
   }
 

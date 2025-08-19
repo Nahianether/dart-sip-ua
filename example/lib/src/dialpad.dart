@@ -11,6 +11,8 @@ import 'package:sip_ua/sip_ua.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 
 import 'widgets/action_button.dart';
+import 'widgets/vpn_status_indicator.dart';
+import 'widgets/vpn_requirement_dialog.dart';
 import 'recent_calls.dart';
 import 'connection_manager.dart';
 
@@ -29,6 +31,10 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
   late SharedPreferences _preferences;
 
   final Logger _logger = Logger();
+  
+  // Flag to prevent multiple navigations to call screen
+  bool _hasNavigatedToCallScreen = false;
+  String? _currentCallId;
 
   @override
   initState() {
@@ -86,6 +92,31 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
       );
       return null;
     }
+
+    // Check VPN connection requirement
+    final connectionManager = ConnectionManager();
+    final vpnManager = connectionManager.vpnManager;
+    
+    if (!vpnManager.isConnected) {
+      print('🔐 VPN not connected - showing requirement dialog');
+      
+      await showVPNRequirementDialog(
+        context,
+        customMessage: 'VPN connection is required to make secure SIP calls. Please connect to VPN first.',
+        onConfigureVPN: () {
+          Navigator.pushNamed(context, '/vpn-config');
+        },
+        onCancel: () {
+          print('🚫 User cancelled call due to VPN requirement');
+        },
+      );
+      
+      // Cancel the call if VPN is not connected
+      print('❌ Call cancelled - VPN connection required');
+      return null;
+    }
+    
+    print('✅ VPN is connected - proceeding with call');
 
     var mediaConstraints = <String, dynamic>{
       'audio': true,
@@ -956,9 +987,16 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
       behavior: HitTestBehavior.translucent,
       child: Scaffold(
       appBar: AppBar(
-        title: Text(
-          "SIP Phone",
-          style: theme.textTheme.headlineMedium,
+        title: Column(
+          children: [
+            Text(
+              "SIP Phone",
+              style: theme.textTheme.headlineMedium,
+            ),
+            VPNStatusIndicator(
+              connectionManager: ConnectionManager(),
+            ),
+          ],
         ),
         centerTitle: true,
         actions: <Widget>[
@@ -1213,6 +1251,44 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     }
   }
 
+  /// Reset navigation flags for new calls
+  void _resetNavigationFlags() {
+    print('🔄 Resetting navigation flags');
+    _hasNavigatedToCallScreen = false;
+    _currentCallId = null;
+  }
+
+  /// Navigate to call screen only once per call
+  void _navigateToCallScreenOnce(Call call) {
+    // Check if this is a new call or if we haven't navigated yet
+    if (_currentCallId != call.id || !_hasNavigatedToCallScreen) {
+      print('🚀 Navigating to call screen for call: ${call.id}');
+      print('📊 Previous call: $_currentCallId, navigated: $_hasNavigatedToCallScreen');
+      
+      try {
+        Navigator.pushNamed(context, '/callscreen', arguments: call).then((_) {
+          // Reset flags when returning from call screen
+          print('🔙 Returned from call screen - resetting navigation flags');
+          _hasNavigatedToCallScreen = false;
+          _currentCallId = null;
+        });
+        
+        // Set flags to prevent multiple navigations
+        _hasNavigatedToCallScreen = true;
+        _currentCallId = call.id;
+        
+        print('✅ Navigation to call screen successful for call: ${call.id}');
+      } catch (e) {
+        print('❌ Navigation failed: $e');
+        // Reset flags on navigation failure
+        _hasNavigatedToCallScreen = false;
+        _currentCallId = null;
+      }
+    } else {
+      print('⏭️ Skipping navigation - already navigated to call screen for call: ${call.id}');
+    }
+  }
+
   @override
   void callStateChanged(Call call, CallState callState) {
     print('🔥🔥🔥 DialPad: Call state changed to ${callState.state} 🔥🔥🔥');
@@ -1223,45 +1299,29 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     
     switch (callState.state) {
       case CallStateEnum.CALL_INITIATION:
-        print('🚀🚀🚀 CALL_INITIATION - Navigating to call screen... 🚀🚀🚀');
-        try {
-          Navigator.pushNamed(context, '/callscreen', arguments: call);
-          print('✅ Navigation to call screen successful');
-        } catch (e) {
-          print('❌ Navigation failed: $e');
-        }
+        print('🚀🚀🚀 CALL_INITIATION - Checking navigation to call screen... 🚀🚀🚀');
+        _navigateToCallScreenOnce(call);
         break;
       case CallStateEnum.CONNECTING:
         print('📞📞📞 CONNECTING - Call connecting... 📞📞📞');
-        // Also try navigating here in case CALL_INITIATION wasn't triggered
-        if (call.direction?.name == 'OUTGOING') {
-          print('🚀 Navigating to call screen on CONNECTING (outgoing)...');
-          try {
-            Navigator.pushNamed(context, '/callscreen', arguments: call);
-            print('✅ CONNECTING navigation successful');
-          } catch (e) {
-            print('❌ CONNECTING navigation failed: $e');
-          }
-        }
+        _navigateToCallScreenOnce(call);
         break;
       case CallStateEnum.PROGRESS:
         print('📞 Call in progress...');
+        _navigateToCallScreenOnce(call);
         break;
       case CallStateEnum.ACCEPTED:
         print('✅ Call accepted - ensuring navigation');
-        try {
-          Navigator.pushNamed(context, '/callscreen', arguments: call);
-          print('✅ ACCEPTED navigation successful');
-        } catch (e) {
-          print('❌ ACCEPTED navigation failed: $e');
-        }
+        _navigateToCallScreenOnce(call);
         break;
       case CallStateEnum.FAILED:
         print('❌ Call failed');
+        _resetNavigationFlags();
         reRegisterWithCurrentUser();
         break;
       case CallStateEnum.ENDED:
         print('📞 Call ended');
+        _resetNavigationFlags();
         reRegisterWithCurrentUser();
         break;
       default:
@@ -1272,8 +1332,32 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
   void reRegisterWithCurrentUser() async {
     final currentUserCubit = ref.read(sipUserCubitProvider);
     if (currentUserCubit.state == null) return;
+    
+    // Check VPN requirement before re-registration
+    final connectionManager = ConnectionManager();
+    final vpnManager = connectionManager.vpnManager;
+    
+    if (!vpnManager.isConnected) {
+      _logger.w('🔐 VPN not connected - cannot re-register to SIP server');
+      
+      // Show VPN requirement dialog in the context if available
+      if (mounted) {
+        await showVPNRequirementDialog(
+          context,
+          customMessage: 'VPN connection is required to connect to SIP server. Please connect to VPN first.',
+          onConfigureVPN: () {
+            Navigator.pushNamed(context, '/vpn-config');
+          },
+          onCancel: () {
+            _logger.i('🚫 User cancelled re-registration due to VPN requirement');
+          },
+        );
+      }
+      return;
+    }
+    
     if (helper!.registered) await helper!.unregister();
-    _logger.i("Re-registering");
+    _logger.i("Re-registering with VPN connected");
     currentUserCubit.register(currentUserCubit.state!);
   }
 
