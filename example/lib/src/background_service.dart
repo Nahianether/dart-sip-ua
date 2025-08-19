@@ -72,8 +72,9 @@ class BackgroundService {
     
     print('Background service started');
     
-    // Initialize SIP in background
-    await _initializeSipInBackground(service);
+    // DO NOT initialize SIP here - let ConnectionManager handle it
+    // The main app's ConnectionManager will maintain the persistent connection
+    print('Background service: SIP connection managed by main app');
 
     service.on('stopService').listen((event) {
       service.stopSelf();

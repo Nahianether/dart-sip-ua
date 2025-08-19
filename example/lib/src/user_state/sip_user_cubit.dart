@@ -11,9 +11,25 @@ class SipUserCubit extends Cubit<SipUser?> implements SipUaHelperListener {
   bool _isRegistered = false;
   
   SipUserCubit({required this.sipHelper}) : super(null) {
-    sipHelper.addSipUaHelperListener(this);
+    // DO NOT add SIP listener here - let ConnectionManager handle it exclusively
     _connectionManager = ConnectionManager();
     _connectionManager.initialize(sipHelper);
+    
+    // Set up callbacks from ConnectionManager to update UI
+    _connectionManager.onRegistrationStateChanged = (state) {
+      registrationStateChanged(state);
+    };
+    _connectionManager.onCallStateChanged = (call, state) {
+      print('🔔 SipUserCubit: Forwarding call state from ConnectionManager: ${state.state}');
+      callStateChanged(call, state);
+      
+      // The call state is already forwarded by ConnectionManager to all listeners
+      // No need to manually call sipHelper methods - it handles the events automatically
+    };
+    _connectionManager.onTransportStateChanged = (state) {
+      transportStateChanged(state);
+    };
+    
     _loadSavedUser();
   }
 
@@ -40,10 +56,11 @@ class SipUserCubit extends Cubit<SipUser?> implements SipUaHelperListener {
       try {
         final sipUser = SipUser.fromJsonString(savedUserJson);
         emit(sipUser);
-        print('SipUserCubit: Found saved user ${sipUser.authUser}, starting persistent connection...');
+        print('SipUserCubit: Found saved user ${sipUser.authUser}, will be managed by ConnectionManager auto-connect...');
         
-        // Start persistent connection with ConnectionManager
-        _connectionManager.startPersistentConnection(sipUser);
+        // Don't start connection here - let ConnectionManager handle auto-connect
+        // This prevents duplicate connection attempts
+        print('SipUserCubit: Connection will be handled by ConnectionManager delayed auto-connect');
         
       } catch (e) {
         print('Error loading saved user: $e');
@@ -125,7 +142,9 @@ class SipUserCubit extends Cubit<SipUser?> implements SipUaHelperListener {
 
   @override
   void callStateChanged(Call call, CallState state) {
-    // No-op for now
+    print('🔔 SipUserCubit: Call state changed: ${state.state}');
+    print('📞 Call ID: ${call.id}, Direction: ${call.direction}');
+    // This is handled by ConnectionManager callbacks, but kept for debugging
   }
 
   @override

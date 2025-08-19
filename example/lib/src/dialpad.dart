@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:dart_sip_ua_example/src/providers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -10,7 +11,6 @@ import 'package:sip_ua/sip_ua.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 
 import 'widgets/action_button.dart';
-import 'permission_helper.dart';
 import 'recent_calls.dart';
 import 'connection_manager.dart';
 
@@ -46,7 +46,11 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
   }
 
   void _bindEventListeners() {
+    // Add listener for UI updates only
+    print('🔧 DialPad: Adding SIP listener...');
     helper!.addSipUaHelperListener(this);
+    print('✅ DialPad: SIP listener added successfully');
+    print('📊 DialPad: SIP listener added for UI updates');
   }
 
   Future<Widget?> _handleCall(BuildContext context,
@@ -134,17 +138,67 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
       return null;
     }
 
-    helper!.call(dest, voiceOnly: voiceOnly, mediaStream: mediaStream);
-    _preferences.setString('dest', dest);
-    ref.read(destinationProvider.notifier).state = dest;
+    print('🚀 Initiating call to: $dest (voice only: $voiceOnly)');
+    print('📞 SIP Helper registered: ${helper!.registered}');
+    print('📞 SIP Helper state: ${helper!.registerState.state}');
     
-    // Add to call history
-    await CallHistoryManager.addCall(
-      number: dest,
-      type: CallType.outgoing,
-    );
+    // Check if we're actually registered before trying to call
+    if (!helper!.registered) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Not registered to SIP server. Cannot make calls.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return null;
+    }
     
-    return null;
+    try {
+      // Store the call initiation - helper.call() returns Future<bool>
+      print('🚀 About to call helper!.call()...');
+      final callResult = await helper!.call(dest, voiceOnly: voiceOnly, mediaStream: mediaStream);
+      print('📞 Call initiation result: $callResult');
+      
+      _preferences.setString('dest', dest);
+      ref.read(destinationProvider.notifier).state = dest;
+      
+      // Add to call history
+      await CallHistoryManager.addCall(
+        number: dest,
+        type: CallType.outgoing,
+      );
+      
+      // Check if we have active calls after initiation
+      Timer(Duration(milliseconds: 1000), () {
+        print('🔍 Attempting navigation after call initiation...');
+        
+        // Try navigation without arguments first (call screen can handle null call)
+        try {
+          Navigator.pushNamed(context, '/callscreen');
+          print('✅ Navigation to call screen successful!');
+        } catch (e) {
+          print('❌ Navigation to call screen failed: $e');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to open call screen: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      });
+      
+      print('✅ Call setup completed - waiting for SIP events...');
+      return null;
+    } catch (e) {
+      print('❌ Call initiation error: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to start call: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return null;
+    }
   }
 
   void _handleBackSpace([bool deleteAll = false]) {
@@ -228,7 +282,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
       // Ensure local number starts with proper mobile prefix
       if (localPart.length >= 10 && localPart.startsWith('1')) {
         // Mobile number like +8801712345678 -> 01712345678
-        cleaned = '0' + localPart;
+        cleaned = '0$localPart';
         print('📞 Bangladesh mobile (+880): $cleaned');
       } else {
         cleaned = localPart;
@@ -243,7 +297,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
         print('📞 Corrected +88 with 01 prefix: $cleaned');
       } else if (localPart.length >= 9 && localPart.startsWith('1')) {
         // Missing leading 0
-        cleaned = '0' + localPart;
+        cleaned = '0$localPart';
         print('📞 Corrected +88 added leading 0: $cleaned');
       } else {
         cleaned = localPart;
@@ -253,7 +307,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
       // Bangladesh without + sign - extract local part
       final localPart = cleaned.substring(3);
       if (localPart.length >= 10 && localPart.startsWith('1')) {
-        cleaned = '0' + localPart;
+        cleaned = '0$localPart';
         print('📞 Bangladesh (880) added leading 0: $cleaned');
       } else {
         cleaned = localPart;
@@ -266,7 +320,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
         cleaned = localPart;
         print('📞 Removed 88, preserved 01: $cleaned');
       } else if (localPart.length >= 9 && localPart.startsWith('1')) {
-        cleaned = '0' + localPart;
+        cleaned = '0$localPart';
         print('📞 Removed 88, added leading 0: $cleaned');
       } else {
         // Keep original if unsure
@@ -295,7 +349,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     // Ensure mobile numbers have proper format
     if (cleaned.length >= 10 && cleaned.startsWith('1') && !cleaned.startsWith('01')) {
       // Looks like a mobile number missing leading 0
-      cleaned = '0' + cleaned;
+      cleaned = '0$cleaned';
       print('📞 Added missing leading 0: $cleaned');
     }
     
@@ -374,30 +428,6 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     }
   }
 
-  void _showPermissionDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Contacts Permission Required'),
-        content: Text(
-          'To pick contacts, please grant contacts permission in your device settings.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              openAppSettings();
-            },
-            child: Text('Open Settings'),
-          ),
-        ],
-      ),
-    );
-  }
 
   Future<void> _debugPermissions() async {
     print('🔍 DEBUGGING PERMISSIONS...');
@@ -641,6 +671,37 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     }
   }
   
+  void _testCallScreenNavigation() {
+    print('🧪 Testing direct call screen navigation...');
+    
+    try {
+      // Test navigation without arguments first
+      print('🧪 Test 1: Navigation without arguments');
+      Navigator.pushNamed(context, '/callscreen').then((_) {
+        print('✅ Navigation without arguments successful!');
+      }).catchError((e) {
+        print('❌ Navigation without arguments failed: $e');
+        
+        // Test navigation with null argument
+        print('🧪 Test 2: Navigation with null argument');
+        Navigator.pushNamed(context, '/callscreen', arguments: null).then((_) {
+          print('✅ Navigation with null argument successful!');
+        }).catchError((e) {
+          print('❌ Navigation with null argument failed: $e');
+        });
+      });
+      
+    } catch (e) {
+      print('❌ Direct navigation test failed: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Navigation test failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   void _showConnectionStatus() {
     final connectionManager = ConnectionManager();
     
@@ -735,7 +796,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
           SizedBox(
             width: 120,
             child: Text(
-              label + ':',
+              '$label:',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
@@ -880,6 +941,12 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     bool isDarkTheme = theme.brightness == Brightness.dark;
     final receivedMsg = ref.watch(receivedMessageProvider);
     final themeNotifier = ref.watch(themeNotifierProvider);
+    final sipUserCubit = ref.watch(sipUserCubitProvider);
+    
+    // Get actual connection status
+    final isConnected = helper!.registered;
+    final hasUser = sipUserCubit.state != null;
+    final actualState = _getActualRegistrationState(isConnected, hasUser);
 
     return GestureDetector(
       onTap: () {
@@ -907,9 +974,10 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
                 ),
                 builder: (context) => Container(
                   padding: const EdgeInsets.all(20),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
                       ListTile(
                         leading: Icon(Icons.account_circle_outlined),
                         title: Text('Account Settings'),
@@ -957,6 +1025,15 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
                         },
                       ),
                       ListTile(
+                        leading: Icon(Icons.phone_forwarded),
+                        title: Text('Test Call Screen Navigation'),
+                        subtitle: Text('Direct navigation test'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _testCallScreenNavigation();
+                        },
+                      ),
+                      ListTile(
                         leading: Icon(Icons.network_check),
                         title: Text('Connection Status'),
                         subtitle: Text('Test persistent connection'),
@@ -965,7 +1042,17 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
                           _showConnectionStatus();
                         },
                       ),
+                      ListTile(
+                        leading: Icon(Icons.vpn_key),
+                        title: Text('VPN Configuration'),
+                        subtitle: Text('Configure secure VPN connection'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          Navigator.pushNamed(context, '/vpn-config');
+                        },
+                      ),
                     ],
+                    ),
                   ),
                 ),
               );
@@ -993,22 +1080,22 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
                         Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
-                            color: helper!.registerState.state == RegistrationStateEnum.REGISTERED
+                            color: actualState == RegistrationStateEnum.REGISTERED
                                 ? Colors.green.withValues(alpha: 0.1)
-                                : helper!.registerState.state == RegistrationStateEnum.REGISTRATION_FAILED
+                                : actualState == RegistrationStateEnum.REGISTRATION_FAILED
                                     ? Colors.red.withValues(alpha: 0.1)
                                     : Colors.orange.withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Icon(
-                            helper!.registerState.state == RegistrationStateEnum.REGISTERED
+                            actualState == RegistrationStateEnum.REGISTERED
                                 ? Icons.check_circle
-                                : helper!.registerState.state == RegistrationStateEnum.REGISTRATION_FAILED
+                                : actualState == RegistrationStateEnum.REGISTRATION_FAILED
                                     ? Icons.error
                                     : Icons.pending,
-                            color: helper!.registerState.state == RegistrationStateEnum.REGISTERED
+                            color: actualState == RegistrationStateEnum.REGISTERED
                                 ? Colors.green
-                                : helper!.registerState.state == RegistrationStateEnum.REGISTRATION_FAILED
+                                : actualState == RegistrationStateEnum.REGISTRATION_FAILED
                                     ? Colors.red
                                     : Colors.orange,
                             size: 24,
@@ -1020,19 +1107,19 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                _getStatusTitle(helper!.registerState.state),
+                                _getStatusTitle(actualState),
                                 style: theme.textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w600,
-                                  color: helper!.registerState.state == RegistrationStateEnum.REGISTERED
+                                  color: actualState == RegistrationStateEnum.REGISTERED
                                       ? Colors.green
-                                      : helper!.registerState.state == RegistrationStateEnum.REGISTRATION_FAILED
+                                      : actualState == RegistrationStateEnum.REGISTRATION_FAILED
                                           ? Colors.red
                                           : Colors.orange,
                                 ),
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                _getStatusSubtitle(helper!.registerState.state),
+                                _getStatusSubtitle(actualState),
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: theme.textTheme.bodySmall?.color?.withValues(alpha: 0.7),
                                 ),
@@ -1040,6 +1127,19 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
                             ],
                           ),
                         ),
+                        // Add disconnect button ONLY for failed states
+                        if (actualState == RegistrationStateEnum.REGISTRATION_FAILED)
+                          SizedBox(width: 8),
+                        if (actualState == RegistrationStateEnum.REGISTRATION_FAILED)
+                          TextButton.icon(
+                            onPressed: _forceDisconnect,
+                            icon: Icon(Icons.stop, size: 16),
+                            label: Text('Stop'),
+                            style: TextButton.styleFrom(
+                              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              textStyle: TextStyle(fontSize: 12),
+                            ),
+                          ),
                       ],
                     ),
                     if (receivedMsg?.isNotEmpty == true) ...[
@@ -1094,27 +1194,78 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
 
   @override
   void registrationStateChanged(RegistrationState state) {
-    setState(() {
-      _logger.i("Registration state: ${state.state?.name}");
-    });
+    print('🔥 DialPad: Registration state changed to ${state.state} 🔥');
+    if (mounted) {
+      setState(() {
+        _logger.i("Registration state: ${state.state?.name}");
+        // UI will rebuild and show updated status
+      });
+    }
   }
 
   @override
-  void transportStateChanged(TransportState state) {}
+  void transportStateChanged(TransportState state) {
+    print('DialPad: Transport state changed to ${state.state}');
+    if (mounted) {
+      setState(() {
+        // UI will rebuild and show updated connection status
+      });
+    }
+  }
 
   @override
   void callStateChanged(Call call, CallState callState) {
+    print('🔥🔥🔥 DialPad: Call state changed to ${callState.state} 🔥🔥🔥');
+    print('📞 Call ID: ${call.id}');
+    print('📞 Call direction: ${call.direction}');
+    print('📞 Call remote identity: ${call.remote_identity}');
+    print('📞 Call local identity: ${call.local_identity}');
+    
     switch (callState.state) {
       case CallStateEnum.CALL_INITIATION:
-        Navigator.pushNamed(context, '/callscreen', arguments: call);
+        print('🚀🚀🚀 CALL_INITIATION - Navigating to call screen... 🚀🚀🚀');
+        try {
+          Navigator.pushNamed(context, '/callscreen', arguments: call);
+          print('✅ Navigation to call screen successful');
+        } catch (e) {
+          print('❌ Navigation failed: $e');
+        }
+        break;
+      case CallStateEnum.CONNECTING:
+        print('📞📞📞 CONNECTING - Call connecting... 📞📞📞');
+        // Also try navigating here in case CALL_INITIATION wasn't triggered
+        if (call.direction?.name == 'OUTGOING') {
+          print('🚀 Navigating to call screen on CONNECTING (outgoing)...');
+          try {
+            Navigator.pushNamed(context, '/callscreen', arguments: call);
+            print('✅ CONNECTING navigation successful');
+          } catch (e) {
+            print('❌ CONNECTING navigation failed: $e');
+          }
+        }
+        break;
+      case CallStateEnum.PROGRESS:
+        print('📞 Call in progress...');
+        break;
+      case CallStateEnum.ACCEPTED:
+        print('✅ Call accepted - ensuring navigation');
+        try {
+          Navigator.pushNamed(context, '/callscreen', arguments: call);
+          print('✅ ACCEPTED navigation successful');
+        } catch (e) {
+          print('❌ ACCEPTED navigation failed: $e');
+        }
         break;
       case CallStateEnum.FAILED:
+        print('❌ Call failed');
         reRegisterWithCurrentUser();
         break;
       case CallStateEnum.ENDED:
+        print('📞 Call ended');
         reRegisterWithCurrentUser();
         break;
       default:
+        print('📞 Other call state: ${callState.state}');
     }
   }
 
@@ -1126,28 +1277,72 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     currentUserCubit.register(currentUserCubit.state!);
   }
 
-  void _forceReconnect() async {
-    final currentUserCubit = ref.read(sipUserCubitProvider);
-    await currentUserCubit.forceReconnect();
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Attempting to reconnect...'),
-        duration: Duration(seconds: 2),
-      ),
-    );
-  }
 
   String _getStatusTitle(RegistrationStateEnum? state) {
-    switch (state) {
-      case RegistrationStateEnum.REGISTERED:
-        return 'Connected';
-      case RegistrationStateEnum.REGISTRATION_FAILED:
-        return 'Connection Failed';
-      case RegistrationStateEnum.UNREGISTERED:
-        return 'Disconnected';
-      default:
-        return 'Connecting...';
+    // Check if we have a saved user but are not connected
+    final sipUserCubit = ref.read(sipUserCubitProvider);
+    final connectionManager = ConnectionManager();
+    
+    if (sipUserCubit.state != null) {
+      switch (state) {
+        case RegistrationStateEnum.REGISTERED:
+          return 'Connected';
+        case RegistrationStateEnum.REGISTRATION_FAILED:
+          return 'Connection Failed';
+        case RegistrationStateEnum.UNREGISTERED:
+          // If we have saved user, show "Auto-connecting..." instead of just "Disconnected"
+          if (connectionManager.shouldMaintainConnection) {
+            return 'Auto-connecting...';
+          } else {
+            return 'Disconnected';
+          }
+        default:
+          return 'Connecting...';
+      }
+    } else {
+      // No saved user
+      switch (state) {
+        case RegistrationStateEnum.REGISTERED:
+          return 'Connected';
+        case RegistrationStateEnum.REGISTRATION_FAILED:
+          return 'Connection Failed';
+        case RegistrationStateEnum.UNREGISTERED:
+          return 'Not Registered';
+        default:
+          return 'Ready to Connect';
+      }
+    }
+  }
+  
+  void _forceDisconnect() async {
+    try {
+      final sipUserCubit = ref.read(sipUserCubitProvider);
+      await sipUserCubit.disconnect();
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Disconnected from SIP server'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    } catch (e) {
+      print('Error disconnecting: $e');
+    }
+  }
+  
+  RegistrationStateEnum _getActualRegistrationState(bool isConnected, bool hasUser) {
+    if (isConnected) {
+      return RegistrationStateEnum.REGISTERED;
+    } else if (hasUser) {
+      // Has saved user but not connected - check if it's a failure or just connecting
+      final connectionManager = ConnectionManager();
+      if (connectionManager.shouldMaintainConnection) {
+        return RegistrationStateEnum.UNREGISTERED; // Will show "Auto-connecting"
+      } else {
+        return RegistrationStateEnum.REGISTRATION_FAILED;
+      }
+    } else {
+      return RegistrationStateEnum.UNREGISTERED;
     }
   }
 
@@ -1170,6 +1365,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     String? msgBody = msg.request.body as String?;
     ref.read(receivedMessageProvider.notifier).state = msgBody;
   }
+
 
   @override
   void onNewNotify(Notify ntf) {}

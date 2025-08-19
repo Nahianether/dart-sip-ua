@@ -6,6 +6,7 @@ import 'package:logger/logger.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'user_state/sip_user.dart';
 import 'background_service.dart';
+import 'vpn_manager.dart';
 
 /// Manages persistent SIP connections with automatic reconnection
 class ConnectionManager implements SipUaHelperListener {
@@ -15,6 +16,7 @@ class ConnectionManager implements SipUaHelperListener {
 
   final Logger _logger = Logger();
   late SIPUAHelper _sipHelper;
+  VPNManager? _vpnManager;
   Timer? _reconnectionTimer;
   Timer? _heartbeatTimer;
   SipUser? _currentUser;
@@ -32,6 +34,7 @@ class ConnectionManager implements SipUaHelperListener {
   DateTime? _lastSuccessfulConnection;
   bool _hasNetworkConnectivity = true;
   Timer? _connectionMonitorTimer;
+  Timer? _connectionTimeoutTimer;
   DateTime? _lastConnectionAttempt;
   
   // Callbacks for UI updates
@@ -44,27 +47,44 @@ class ConnectionManager implements SipUaHelperListener {
     _sipHelper = sipHelper;
     _setupNetworkMonitoring();
     
+    // Initialize VPN Manager lazily
+    _initializeVPN();
+    
     // Check for saved connection and auto-connect if available
     _loadSavedConnectionAndAutoConnect();
   }
+  
+  Future<void> _initializeVPN() async {
+    try {
+      _vpnManager ??= VPNManager();
+      await _vpnManager!.initialize();
+      _logger.i('VPN Manager initialized successfully');
+    } catch (e) {
+      _logger.e('VPN Manager initialization failed: $e');
+    }
+  }
 
   void _setupNetworkMonitoring() {
+    // Start with assuming connectivity is available
+    _hasNetworkConnectivity = true;
+    
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((List<ConnectivityResult> results) {
       final bool hasConnectivity = results.isNotEmpty && 
           results.any((result) => result != ConnectivityResult.none);
       
       _logger.i('Network connectivity changed: $hasConnectivity (was: $_hasNetworkConnectivity)');
       
+      // Only act on significant connectivity changes, not initial false negatives
       if (!_hasNetworkConnectivity && hasConnectivity) {
         // Network restored - attempt immediate reconnection
         _logger.i('Network restored, attempting immediate reconnection');
         _hasNetworkConnectivity = true;
-        if (_shouldMaintainConnection && !_sipHelper.registered) {
+        if (_shouldMaintainConnection && !_sipHelper.registered && !_isConnecting) {
           _reconnectionAttempts = 0; // Reset attempts on network restore
-          _connectWithRetry();
+          Future.delayed(Duration(seconds: 2), () => _connectWithRetry());
         }
       } else if (_hasNetworkConnectivity && !hasConnectivity) {
-        // Network lost
+        // Network lost - but only if we've been running for a while
         _logger.w('Network connectivity lost');
         _hasNetworkConnectivity = false;
         _stopReconnectionTimer(); // Don't waste attempts when no network
@@ -76,7 +96,20 @@ class ConnectionManager implements SipUaHelperListener {
 
   /// Start maintaining persistent connection
   Future<void> startPersistentConnection(SipUser user) async {
-    _logger.i('Starting persistent connection for user: ${user.authUser}');
+    _logger.i('🔄 Starting persistent connection for user: ${user.authUser}');
+    
+    // Stop any existing connection first to avoid conflicts
+    if (_sipHelper.registered) {
+      _logger.i('🛑 Stopping existing connection to avoid conflicts...');
+      try {
+        await _sipHelper.unregister();
+        _sipHelper.stop();
+        await Future.delayed(Duration(milliseconds: 1000)); // Wait for clean shutdown
+      } catch (e) {
+        _logger.w('Warning during connection cleanup: $e');
+      }
+    }
+    
     _currentUser = user;
     _shouldMaintainConnection = true;
     _reconnectionAttempts = 0;
@@ -95,6 +128,8 @@ class ConnectionManager implements SipUaHelperListener {
     _shouldMaintainConnection = false;
     _stopReconnectionTimer();
     _stopHeartbeat();
+    _stopConnectionTimeout();
+    _isConnecting = false;
     
     // Remove SIP listener
     _sipHelper.removeSipUaHelperListener(this);
@@ -119,12 +154,70 @@ class ConnectionManager implements SipUaHelperListener {
     _reconnectionAttempts = 0;
     await _connectWithRetry();
   }
+  
+  /// Configure VPN for secure SIP connection
+  Future<void> configureVPN({
+    required String serverAddress,
+    required String username,
+    required String password,
+    String? customConfig,
+    bool enableAutoConnect = true,
+  }) async {
+    try {
+      _logger.i('Configuring VPN for secure SIP connection...');
+      
+      // Ensure VPN manager is initialized
+      _vpnManager ??= VPNManager();
+      
+      await _vpnManager!.configureVPN(
+        serverAddress: serverAddress,
+        username: username,
+        password: password,
+        customConfig: customConfig,
+      );
+      
+      _vpnManager!.enableAutoConnect(enableAutoConnect);
+      
+      _logger.i('VPN configuration completed');
+    } catch (e) {
+      _logger.e('VPN configuration failed: $e');
+      rethrow;
+    }
+  }
+  
+  /// Test VPN connection
+  Future<bool> testVPNConnection() async {
+    try {
+      _logger.i('Testing VPN connection...');
+      return await _connectVPN();
+    } catch (e) {
+      _logger.e('VPN test failed: $e');
+      return false;
+    }
+  }
+  
+  /// Disconnect VPN
+  Future<void> disconnectVPN() async {
+    try {
+      _logger.i('Disconnecting VPN...');
+      _vpnManager ??= VPNManager();
+      await _vpnManager!.disconnect();
+    } catch (e) {
+      _logger.e('VPN disconnect failed: $e');
+    }
+  }
 
   /// Check if connection is active
   bool get isConnected => _sipHelper.registered;
   
   /// Check if should maintain connection
   bool get shouldMaintainConnection => _shouldMaintainConnection;
+  
+  /// Get VPN manager for configuration
+  VPNManager get vpnManager {
+    _vpnManager ??= VPNManager();
+    return _vpnManager!;
+  }
   
   /// Get comprehensive connection status for monitoring
   Map<String, dynamic> getConnectionStatus() {
@@ -172,13 +265,43 @@ class ConnectionManager implements SipUaHelperListener {
       return;
     }
     
+    // Check network connectivity first
+    if (!_hasNetworkConnectivity) {
+      _logger.w('No network connectivity, skipping connection attempt');
+      return;
+    }
+    
     _lastConnectionAttempt = DateTime.now();
     _isConnecting = true;
     _stopReconnectionTimer();
     
+    // Start connection timeout timer (30 seconds)
+    _startConnectionTimeout();
+    
     _logger.i('🔄 Starting connection attempt ${_reconnectionAttempts + 1}');
+    _logger.i('📊 User: ${_currentUser!.authUser}, Server: ${_currentUser!.wsUrl}');
     
     try {
+      // Force stop any existing connection first
+      if (_sipHelper.registered) {
+        _logger.i('🛑 Stopping existing connection before retry...');
+        await _sipHelper.unregister();
+        _sipHelper.stop();
+        await Future.delayed(Duration(milliseconds: 500)); // Short delay
+      }
+      
+      // Step 1: Connect VPN if configured and enabled
+      if (_vpnManager?.isConfigured == true && _vpnManager?.shouldAutoConnect == true) {
+        _logger.i('🔐 VPN auto-connect enabled, connecting VPN first...');
+        final vpnConnected = await _connectVPN();
+        if (!vpnConnected) {
+          throw Exception('VPN connection failed - cannot establish secure SIP connection');
+        }
+      } else {
+        _logger.i('🔍 VPN not configured or auto-connect disabled, proceeding with direct SIP connection');
+      }
+      
+      // Step 2: Connect SIP
       await _connect(_currentUser!);
       _logger.i('✅ Connection attempt completed');
     } catch (e) {
@@ -186,11 +309,79 @@ class ConnectionManager implements SipUaHelperListener {
       _scheduleReconnection();
     }
     
+    _stopConnectionTimeout();
     _isConnecting = false;
+  }
+  
+  void _startConnectionTimeout() {
+    _stopConnectionTimeout();
+    _connectionTimeoutTimer = Timer(Duration(seconds: 30), () {
+      if (_isConnecting) {
+        _logger.e('⏰ Connection timeout after 30 seconds');
+        _isConnecting = false;
+        _stopConnectionTimeout();
+        
+        // Force stop the helper and try again
+        try {
+          _sipHelper.stop();
+        } catch (e) {
+          _logger.w('Error stopping SIP helper on timeout: $e');
+        }
+        
+        _scheduleReconnection();
+      }
+    });
+  }
+  
+  void _stopConnectionTimeout() {
+    _connectionTimeoutTimer?.cancel();
+    _connectionTimeoutTimer = null;
+  }
+  
+  Future<bool> _connectVPN() async {
+    try {
+      _logger.i('🔐 Attempting VPN connection...');
+      
+      // Ensure VPN manager is initialized
+      _vpnManager ??= VPNManager();
+      
+      if (_vpnManager!.isConnected) {
+        _logger.i('✅ VPN already connected');
+        return true;
+      }
+      
+      final success = await _vpnManager!.connect();
+      if (success) {
+        // Wait for VPN to establish connection
+        int attempts = 0;
+        while (!_vpnManager!.isConnected && attempts < 30) { // Wait up to 15 seconds
+          await Future.delayed(Duration(milliseconds: 500));
+          attempts++;
+        }
+        
+        if (_vpnManager!.isConnected) {
+          _logger.i('✅ VPN connected successfully');
+          return true;
+        } else {
+          _logger.e('❌ VPN connection timeout');
+          return false;
+        }
+      } else {
+        _logger.e('❌ VPN connection failed');
+        return false;
+      }
+    } catch (e) {
+      _logger.e('❌ VPN connection error: $e');
+      return false;
+    }
   }
 
   Future<void> _connect(SipUser user) async {
-    _logger.i('Attempting SIP connection...');
+    _logger.i('🔌 Attempting SIP connection...');
+    _logger.i('📋 Connection details:');
+    _logger.i('   User: ${user.authUser}');
+    _logger.i('   Server: ${user.wsUrl}');
+    _logger.i('   Transport: ${user.selectedTransport}');
     
     UaSettings settings = UaSettings();
     
@@ -205,9 +396,23 @@ class ConnectionManager implements SipUaHelperListener {
         username = parts[0].replaceAll('sip:', '');
         domain = parts[1];
       }
+    } else if (user.wsUrl?.isNotEmpty == true) {
+      // Try to extract domain from WebSocket URL
+      try {
+        final uri = Uri.parse(user.wsUrl!);
+        domain = uri.host;
+      } catch (e) {
+        _logger.w('Failed to parse domain from WebSocket URL: $e');
+        domain = 'localhost'; // fallback
+      }
     }
     
     String properSipUri = 'sip:$username@$domain';
+    
+    _logger.i('📊 Parsed connection details:');
+    _logger.i('   SIP URI: $properSipUri');
+    _logger.i('   Domain: $domain');
+    _logger.i('   Username: $username');
     
     // Configure settings with robust connection parameters
     settings.webSocketUrl = user.wsUrl ?? '';
@@ -228,16 +433,20 @@ class ConnectionManager implements SipUaHelperListener {
     settings.register_expires = 300; // Shorter expiry for more frequent registration refreshes
     settings.contact_uri = null;
     
-    // Enhanced connection settings for stability (commented out if not supported)
-    // settings.session_timers = true;
-    // settings.session_timers_refresh_method = SipMethod.UPDATE;
-    
     if (user.selectedTransport != TransportType.WS && user.port.isNotEmpty) {
       settings.port = user.port;
+      _logger.i('   Port: ${user.port}');
     }
     
-    _logger.i('Connecting with settings: ${settings.uri} via ${settings.webSocketUrl}');
-    await _sipHelper.start(settings);
+    _logger.i('🚀 Starting SIP connection with URI: ${settings.uri} via ${settings.webSocketUrl}');
+    
+    try {
+      await _sipHelper.start(settings);
+      _logger.i('✅ SIP helper started successfully');
+    } catch (e) {
+      _logger.e('❌ SIP helper start failed: $e');
+      rethrow;
+    }
   }
 
   void _scheduleReconnection() {
@@ -396,9 +605,18 @@ class ConnectionManager implements SipUaHelperListener {
       final shouldMaintain = prefs.getBool('should_maintain_connection') ?? false;
       
       if (savedUserJson != null && shouldMaintain) {
-        _logger.i('ConnectionManager: Found saved connection, starting persistent connection...');
+        _logger.i('ConnectionManager: Found saved connection, scheduling auto-connect...');
         final sipUser = SipUser.fromJsonString(savedUserJson);
-        await startPersistentConnection(sipUser);
+        
+        // Add delay to prevent interference with app startup
+        Future.delayed(Duration(seconds: 3), () async {
+          if (_shouldMaintainConnection == false) { // Only connect if not already started
+            _logger.i('ConnectionManager: Starting delayed auto-connect...');
+            await startPersistentConnection(sipUser);
+          } else {
+            _logger.i('ConnectionManager: Connection already managed, skipping auto-connect');
+          }
+        });
       } else {
         _logger.i('ConnectionManager: No saved connection found');
       }
@@ -409,32 +627,39 @@ class ConnectionManager implements SipUaHelperListener {
 
   @override
   void registrationStateChanged(RegistrationState state) {
-    _logger.i('Registration state changed: ${state.state}');
+    _logger.i('📞 Registration state changed: ${state.state}');
     
     switch (state.state) {
       case RegistrationStateEnum.REGISTERED:
-        _logger.i('Successfully registered!');
+        _logger.i('✅ Successfully registered to SIP server!');
+        _logger.i('🎉 Connection is now active and ready for calls');
         _reconnectionAttempts = 0; // Reset on successful registration
         _lastSuccessfulConnection = DateTime.now();
+        _isConnecting = false; // Clear connecting flag
         BackgroundService.startService();
         break;
         
       case RegistrationStateEnum.UNREGISTERED:
-        _logger.w('Unregistered. Attempting reconnection if needed...');
+        _logger.w('🔌 Unregistered from SIP server');
         if (_shouldMaintainConnection && !_isConnecting) {
+          _logger.i('🔄 Auto-reconnection enabled, scheduling reconnection...');
           _scheduleReconnection();
+        } else {
+          _logger.i('ℹ️ Auto-reconnection disabled or already connecting');
         }
         break;
         
       case RegistrationStateEnum.REGISTRATION_FAILED:
-        _logger.e('Registration failed: ${state.cause}');
+        _logger.e('❌ Registration failed: ${state.cause}');
+        _logger.e('💡 This usually means incorrect credentials or server issues');
         if (_shouldMaintainConnection && !_isConnecting) {
+          _logger.i('🔄 Scheduling reconnection attempt...');
           _scheduleReconnection();
         }
         break;
         
       default:
-        _logger.d('Registration state: ${state.state}');
+        _logger.d('📋 Registration state: ${state.state}');
     }
     
     // Notify UI
@@ -467,7 +692,10 @@ class ConnectionManager implements SipUaHelperListener {
 
   @override
   void callStateChanged(Call call, CallState state) {
-    _logger.i('Call state changed: ${state.state}');
+    _logger.i('🔔 ConnectionManager: Call state changed: ${state.state}');
+    _logger.i('📞 Call ID: ${call.id}, Direction: ${call.direction}');
+    
+    // Forward the call state to UI listeners
     onCallStateChanged?.call(call, state);
   }
 

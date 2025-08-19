@@ -32,7 +32,9 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
   @override
   void initState() {
     super.initState();
-    helper!.addSipUaHelperListener(this);
+    // DO NOT add SIP listener here - ConnectionManager handles it
+    // helper!.addSipUaHelperListener(this);
+    print('RegisterWidget: SIP events managed by ConnectionManager');
     _loadSettings();
     if (kIsWeb) {
       ref.read(transportTypeProvider.notifier).state = TransportType.WS;

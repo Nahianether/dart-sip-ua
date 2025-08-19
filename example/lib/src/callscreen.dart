@@ -50,11 +50,11 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
 
   SIPUAHelper? get helper => widget._helper;
 
-  bool get voiceOnly => call!.voiceOnly && !call!.remote_has_video;
+  bool get voiceOnly => call?.voiceOnly == true && call?.remote_has_video != true;
 
-  String? get remoteIdentity => call!.remote_identity;
+  String? get remoteIdentity => call?.remote_identity;
 
-  Direction? get direction => call!.direction;
+  Direction? get direction => call?.direction;
 
   Call? get call => widget._call;
 
@@ -62,7 +62,9 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   initState() {
     super.initState();
     _initRenderers();
-    helper!.addSipUaHelperListener(this);
+    if (helper != null) {
+      helper!.addSipUaHelperListener(this);
+    }
     _initProximitySensor();
     // Don't start timer immediately - wait for call to be answered
   }
@@ -74,7 +76,9 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
     print('🔄 CallScreen deactivating...');
     
     try {
-      helper!.removeSipUaHelperListener(this);
+      if (helper != null) {
+        helper!.removeSipUaHelperListener(this);
+      }
     } catch (e) {
       print('Error removing SIP listener: $e');
     }
@@ -200,15 +204,15 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
     }
 
     if (callState.state == CallStateEnum.MUTED) {
-      if (callState.audio!) _audioMuted = true;
-      if (callState.video!) _videoMuted = true;
+      if (callState.audio == true) _audioMuted = true;
+      if (callState.video == true) _videoMuted = true;
       setState(() {});
       return;
     }
 
     if (callState.state == CallStateEnum.UNMUTED) {
-      if (callState.audio!) _audioMuted = false;
-      if (callState.video!) _videoMuted = false;
+      if (callState.audio == true) _audioMuted = false;
+      if (callState.video == true) _videoMuted = false;
       setState(() {});
       return;
     }
@@ -223,12 +227,17 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
         break;
       case CallStateEnum.ENDED:
       case CallStateEnum.FAILED:
+        print('🔥🔥🔥 CALL ${callState.state} - Starting hangup process 🔥🔥🔥');
+        
         // Add call completion to history with duration
         final callDuration = _callConfirmed && _callStartTime > 0
             ? (DateTime.now().millisecondsSinceEpoch ~/ 1000) - _callStartTime
             : 0;
         
+        print('📊 Call duration: ${callDuration}s, confirmed: $_callConfirmed');
+        
         if (callState.state == CallStateEnum.FAILED) {
+          print('❌ Call failed - adding to history');
           // Failed call
           CallHistoryManager.addCall(
             number: remoteIdentity ?? 'Unknown',
@@ -236,6 +245,7 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
             duration: callDuration,
           );
         } else if (!_callConfirmed && direction == Direction.incoming) {
+          print('📞 Missed incoming call - adding to history');
           // Missed incoming call
           CallHistoryManager.addCall(
             number: remoteIdentity ?? 'Unknown',
@@ -245,6 +255,7 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
         // Note: Outgoing calls are already tracked when initiated
         // Incoming calls are tracked when confirmed
         
+        print('🔙 About to call _backToDialPad()...');
         _backToDialPad();
         break;
       case CallStateEnum.UNMUTED:
@@ -309,24 +320,34 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   }
 
   void _backToDialPad() {
+    print('🔙🔙🔙 _backToDialPad() called 🔙🔙🔙');
+    
     if (_isNavigatingBack) {
       print('🚫 Already navigating back, skipping duplicate call');
       return;
     }
     
     print('🔙 Starting navigation back to dialpad...');
+    print('📊 Current state: mounted=$mounted, navigating=$_isNavigatingBack');
     _isNavigatingBack = true;
     
     try {
       _timer.cancel();
+      print('⏰ Timer canceled successfully');
     } catch (e) {
       print('Error canceling timer in _backToDialPad: $e');
     }
     
+    print('🧹 Calling _cleanUp()...');
     _cleanUp();
+    print('✅ _cleanUp() completed');
     
     // Shorter delay for better UX
+    print('⏰ Setting up 800ms delay timer for navigation...');
     Timer(Duration(milliseconds: 800), () {
+      print('🔔 Navigation timer triggered!');
+      print('📊 Timer check: mounted=$mounted, navigating=$_isNavigatingBack');
+      
       try {
         if (mounted && _isNavigatingBack) {
           print('🔙 Executing navigation back to dialpad');
@@ -340,6 +361,7 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
         // Try to force navigation if regular pop fails
         try {
           if (mounted) {
+            print('🚨 Trying force navigation with popUntil...');
             Navigator.of(context).popUntil((route) => route.isFirst);
           }
         } catch (e2) {
@@ -433,9 +455,25 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
     
     // Let the call state change handler manage navigation back
     print('📞 Hangup initiated - waiting for call state change to handle navigation');
+    
+    // Add backup navigation in case call state change doesn't trigger
+    Timer(Duration(seconds: 2), () {
+      if (mounted && !_isNavigatingBack) {
+        print('⏰ Backup navigation triggered - call state event may not have fired');
+        print('🚨 Forcing navigation back to dialpad after 2 seconds');
+        _backToDialPad();
+      } else {
+        print('✅ Normal navigation already handled or widget unmounted');
+      }
+    });
   }
 
   void _handleAccept() async {
+    if (call == null) {
+      print('❌ Cannot accept call - call object is null');
+      return;
+    }
+    
     bool remoteHasVideo = call!.remote_has_video;
     final mediaConstraints = <String, dynamic>{
       'audio': true,
@@ -466,8 +504,10 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
       mediaStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
     }
 
-    call!.answer(helper!.buildCallOptions(!remoteHasVideo),
-        mediaStream: mediaStream);
+    if (call != null && helper != null) {
+      call!.answer(helper!.buildCallOptions(!remoteHasVideo),
+          mediaStream: mediaStream);
+    }
   }
 
   void _switchCamera() {
@@ -584,7 +624,7 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   }
 
   void _handleVideoUpgrade() {
-    if (voiceOnly) {
+    if (voiceOnly && call != null && helper != null) {
       setState(() {
         call!.voiceOnly = false;
       });
@@ -592,7 +632,7 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
           call: call!,
           voiceOnly: false,
           done: (IncomingMessage? incomingMessage) {});
-    } else {
+    } else if (call != null && helper != null) {
       helper!.renegotiate(
           call: call!,
           voiceOnly: true,
@@ -683,18 +723,24 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   }
 
   Widget _buildActionButtons() {
-    final hangupBtn = ActionButton(
-      title: "hangup",
-      onPressed: () => _handleHangup(),
-      icon: Icons.call_end,
-      fillColor: Colors.red,
+    final hangupBtn = AnimatedContainer(
+      duration: Duration(milliseconds: 200),
+      child: ActionButton(
+        title: "End Call",
+        onPressed: () => _handleHangup(),
+        icon: Icons.call_end,
+        fillColor: Colors.red.shade600,
+      ),
     );
 
-    final hangupBtnInactive = ActionButton(
-      title: "hangup",
-      onPressed: () {},
-      icon: Icons.call_end,
-      fillColor: Colors.grey,
+    final hangupBtnInactive = AnimatedContainer(
+      duration: Duration(milliseconds: 200),
+      child: ActionButton(
+        title: "Call Ended",
+        onPressed: () {},
+        icon: Icons.call_end,
+        fillColor: Colors.grey.shade400,
+      ),
     );
 
     final basicActions = <Widget>[];
@@ -705,83 +751,139 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
       case CallStateEnum.NONE:
       case CallStateEnum.CONNECTING:
         if (direction == Direction.incoming) {
-          basicActions.add(ActionButton(
-            title: "Accept",
-            fillColor: Colors.green,
-            icon: Icons.phone,
-            onPressed: () => _handleAccept(),
+          basicActions.add(AnimatedScale(
+            scale: 1.0,
+            duration: Duration(milliseconds: 300),
+            child: ActionButton(
+              title: "Accept",
+              fillColor: Colors.green.shade600,
+              icon: Icons.phone_rounded,
+              onPressed: () => _handleAccept(),
+            ),
           ));
-          basicActions.add(hangupBtn);
+          basicActions.add(AnimatedScale(
+            scale: 1.0,
+            duration: Duration(milliseconds: 300),
+            child: hangupBtn,
+          ));
         } else {
-          basicActions.add(hangupBtn);
+          basicActions.add(AnimatedScale(
+            scale: 1.0,
+            duration: Duration(milliseconds: 300),
+            child: hangupBtn,
+          ));
         }
         break;
       case CallStateEnum.ACCEPTED:
       case CallStateEnum.CONFIRMED:
         {
-          advanceActions.add(ActionButton(
-            title: _audioMuted ? 'unmute' : 'mute',
-            icon: _audioMuted ? Icons.mic_off : Icons.mic,
-            checked: _audioMuted,
-            onPressed: () => _muteAudio(),
+          // Audio controls with smooth animations
+          advanceActions.add(AnimatedSwitcher(
+            duration: Duration(milliseconds: 250),
+            child: ActionButton(
+              key: ValueKey('mute_${_audioMuted}'),
+              title: _audioMuted ? 'Unmute' : 'Mute',
+              icon: _audioMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
+              checked: _audioMuted,
+              fillColor: _audioMuted ? Colors.red.shade400 : null,
+              onPressed: () => _muteAudio(),
+            ),
           ));
 
           if (voiceOnly) {
-            advanceActions.add(ActionButton(
-              title: "keypad",
-              icon: Icons.dialpad,
-              onPressed: () => _handleKeyPad(),
+            // Keypad button for voice calls
+            advanceActions.add(AnimatedContainer(
+              duration: Duration(milliseconds: 200),
+              child: ActionButton(
+                title: "Keypad",
+                icon: Icons.dialpad_rounded,
+                checked: _showNumPad,
+                fillColor: _showNumPad ? Colors.blue.shade400 : null,
+                onPressed: () => _handleKeyPad(),
+              ),
             ));
           } else {
-            advanceActions.add(ActionButton(
-              title: "switch camera",
-              icon: Icons.switch_video,
-              onPressed: () => _switchCamera(),
+            // Camera switch for video calls
+            advanceActions.add(AnimatedContainer(
+              duration: Duration(milliseconds: 200),
+              child: ActionButton(
+                title: "Switch Camera",
+                icon: Icons.switch_camera_rounded,
+                onPressed: () => _switchCamera(),
+              ),
             ));
           }
 
           if (voiceOnly) {
-            advanceActions.add(ActionButton(
-              title: _speakerOn ? 'speaker off' : 'speaker on',
-              icon: _speakerOn ? Icons.volume_up : Icons.volume_down,
-              checked: _speakerOn,
-              fillColor: _speakerOn ? Colors.blue : null,
-              onPressed: () => _toggleSpeaker(),
+            // Speaker controls for voice calls
+            advanceActions.add(AnimatedSwitcher(
+              duration: Duration(milliseconds: 250),
+              child: ActionButton(
+                key: ValueKey('speaker_${_speakerOn}'),
+                title: _speakerOn ? 'Speaker Off' : 'Speaker On',
+                icon: _speakerOn ? Icons.volume_up_rounded : Icons.volume_down_rounded,
+                checked: _speakerOn,
+                fillColor: _speakerOn ? Colors.blue.shade400 : null,
+                onPressed: () => _toggleSpeaker(),
+              ),
             ));
-            advanceActions2.add(ActionButton(
-              title: 'request video',
-              icon: Icons.videocam,
-              onPressed: () => _handleVideoUpgrade(),
+            
+            // Video request button
+            advanceActions2.add(AnimatedContainer(
+              duration: Duration(milliseconds: 200),
+              child: ActionButton(
+                title: 'Enable Video',
+                icon: Icons.videocam_rounded,
+                onPressed: () => _handleVideoUpgrade(),
+              ),
             ));
           } else {
-            advanceActions.add(ActionButton(
-              title: _videoMuted ? "camera on" : 'camera off',
-              icon: _videoMuted ? Icons.videocam : Icons.videocam_off,
-              checked: _videoMuted,
-              onPressed: () => _muteVideo(),
+            // Video mute controls for video calls
+            advanceActions.add(AnimatedSwitcher(
+              duration: Duration(milliseconds: 250),
+              child: ActionButton(
+                key: ValueKey('video_${_videoMuted}'),
+                title: _videoMuted ? "Camera On" : 'Camera Off',
+                icon: _videoMuted ? Icons.videocam_rounded : Icons.videocam_off_rounded,
+                checked: _videoMuted,
+                fillColor: _videoMuted ? Colors.red.shade400 : null,
+                onPressed: () => _muteVideo(),
+              ),
             ));
           }
 
-          basicActions.add(ActionButton(
-            title: _hold ? 'unhold' : 'hold',
-            icon: _hold ? Icons.play_arrow : Icons.pause,
-            checked: _hold,
-            onPressed: () => _handleHold(),
+          // Hold/Resume button
+          basicActions.add(AnimatedSwitcher(
+            duration: Duration(milliseconds: 250),
+            child: ActionButton(
+              key: ValueKey('hold_${_hold}'),
+              title: _hold ? 'Resume' : 'Hold',
+              icon: _hold ? Icons.play_arrow_rounded : Icons.pause_rounded,
+              checked: _hold,
+              fillColor: _hold ? Colors.orange.shade400 : null,
+              onPressed: () => _handleHold(),
+            ),
           ));
 
           basicActions.add(hangupBtn);
 
           if (_showNumPad) {
-            basicActions.add(ActionButton(
-              title: "back",
-              icon: Icons.keyboard_arrow_down,
-              onPressed: () => _handleKeyPad(),
+            basicActions.add(AnimatedContainer(
+              duration: Duration(milliseconds: 200),
+              child: ActionButton(
+                title: "Hide Keypad",
+                icon: Icons.keyboard_arrow_down_rounded,
+                onPressed: () => _handleKeyPad(),
+              ),
             ));
           } else {
-            basicActions.add(ActionButton(
-              title: "transfer",
-              icon: Icons.phone_forwarded,
-              onPressed: () => _handleTransfer(),
+            basicActions.add(AnimatedContainer(
+              duration: Duration(milliseconds: 200),
+              child: ActionButton(
+                title: "Transfer",
+                icon: Icons.phone_forwarded_rounded,
+                onPressed: () => _handleTransfer(),
+              ),
             ));
           }
         }
@@ -789,6 +891,19 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
       case CallStateEnum.FAILED:
       case CallStateEnum.ENDED:
         basicActions.add(hangupBtnInactive);
+        // Add manual back button as safety measure
+        basicActions.add(AnimatedContainer(
+          duration: Duration(milliseconds: 300),
+          child: ActionButton(
+            title: "Back to Dialpad",
+            icon: Icons.arrow_back_rounded,
+            fillColor: Colors.blue.shade600,
+            onPressed: () {
+              print('🔙 Manual "Back to Dialpad" button pressed');
+              _backToDialPad();
+            },
+          ),
+        ));
         break;
       case CallStateEnum.PROGRESS:
         basicActions.add(hangupBtn);
@@ -801,36 +916,89 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
     final actionWidgets = <Widget>[];
 
     if (_showNumPad) {
-      actionWidgets.addAll(_buildNumPad());
+      actionWidgets.add(
+        AnimatedSwitcher(
+          duration: Duration(milliseconds: 400),
+          transitionBuilder: (Widget child, Animation<double> animation) {
+            return SlideTransition(
+              position: Tween<Offset>(
+                begin: Offset(0, 0.3),
+                end: Offset.zero,
+              ).animate(CurvedAnimation(
+                parent: animation,
+                curve: Curves.easeOutBack,
+              )),
+              child: FadeTransition(
+                opacity: animation,
+                child: child,
+              ),
+            );
+          },
+          child: Column(
+            key: ValueKey('numpad'),
+            children: _buildNumPad(),
+          ),
+        ),
+      );
     } else {
-      if (advanceActions2.isNotEmpty) {
-        actionWidgets.add(
-          Padding(
-            padding: const EdgeInsets.all(3),
-            child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: advanceActions2),
+      actionWidgets.add(
+        AnimatedSwitcher(
+          duration: Duration(milliseconds: 300),
+          child: Column(
+            key: ValueKey('controls'),
+            children: [
+              if (advanceActions2.isNotEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: advanceActions2.map((action) => 
+                      AnimatedScale(
+                        scale: 1.0,
+                        duration: Duration(milliseconds: 150),
+                        child: action,
+                      )
+                    ).toList(),
+                  ),
+                ),
+              ],
+              if (advanceActions.isNotEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: advanceActions.map((action) => 
+                      AnimatedScale(
+                        scale: 1.0,
+                        duration: Duration(milliseconds: 150),
+                        child: action,
+                      )
+                    ).toList(),
+                  ),
+                ),
+              ],
+            ],
           ),
-        );
-      }
-      if (advanceActions.isNotEmpty) {
-        actionWidgets.add(
-          Padding(
-            padding: const EdgeInsets.all(3),
-            child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: advanceActions),
-          ),
-        );
-      }
+        ),
+      );
     }
 
     actionWidgets.add(
       Padding(
-        padding: const EdgeInsets.all(3),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
         child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: basicActions),
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: basicActions.map((action) => 
+            AnimatedScale(
+              scale: 1.0,
+              duration: Duration(milliseconds: 150),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4),
+                child: action,
+              ),
+            )
+          ).toList(),
+        ),
       ),
     );
 
@@ -884,15 +1052,36 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
                 crossAxisAlignment: CrossAxisAlignment.center,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: <Widget>[
-                  Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(6),
+                  AnimatedContainer(
+                    duration: Duration(milliseconds: 300),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: _hold 
+                          ? Colors.orange.withValues(alpha: 0.2)
+                          : _state == CallStateEnum.CONFIRMED
+                              ? Colors.green.withValues(alpha: 0.1) 
+                              : Colors.transparent,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: AnimatedSwitcher(
+                      duration: Duration(milliseconds: 300),
                       child: Text(
-                        (voiceOnly ? 'VOICE CALL' : 'VIDEO CALL') +
-                            (_hold
-                                ? ' PAUSED BY ${_holdOriginator!.name}'
-                                : ''),
-                        style: TextStyle(fontSize: 24, color: textColor),
+                        _hold 
+                            ? 'CALL PAUSED BY ${_holdOriginator?.name ?? 'UNKNOWN'}'
+                            : voiceOnly 
+                                ? 'VOICE CALL' 
+                                : 'VIDEO CALL',
+                        key: ValueKey('${_hold}_$voiceOnly'),
+                        style: TextStyle(
+                          fontSize: _hold ? 18 : 22,
+                          fontWeight: FontWeight.w600,
+                          color: _hold 
+                              ? Colors.orange.shade700
+                              : _state == CallStateEnum.CONFIRMED
+                                  ? Colors.green.shade700
+                                  : textColor,
+                        ),
+                        textAlign: TextAlign.center,
                       ),
                     ),
                   ),
@@ -932,12 +1121,50 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
     );
   }
 
+  String _getCallStateTitle() {
+    switch (_state) {
+      case CallStateEnum.CONNECTING:
+        return direction == Direction.incoming ? 'Incoming Call' : 'Calling...';
+      case CallStateEnum.PROGRESS:
+        return 'Connecting...';
+      case CallStateEnum.ACCEPTED:
+      case CallStateEnum.CONFIRMED:
+        return _hold ? 'Call on Hold' : 'Call Active';
+      case CallStateEnum.ENDED:
+        return 'Call Ended';
+      case CallStateEnum.FAILED:
+        return 'Call Failed';
+      default:
+        return 'Call';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: false,
-        title: Text('[$direction] ${_state.name}'),
+        title: AnimatedSwitcher(
+          duration: Duration(milliseconds: 300),
+          child: Text(
+            _getCallStateTitle(),
+            key: ValueKey(_state.name),
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
+          ),
+        ),
+        backgroundColor: _hold 
+            ? Colors.orange.shade700
+            : _state == CallStateEnum.CONFIRMED 
+                ? Colors.green.shade700 
+                : null,
+        actions: [
+          if (call != null || helper != null)
+            IconButton(
+              icon: Icon(Icons.close),
+              onPressed: () => _backToDialPad(),
+              tooltip: 'End Call',
+            ),
+        ],
       ),
       body: _buildContent(),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
@@ -967,18 +1194,24 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
               TextButton(
                 child: const Text('Cancel'),
                 onPressed: () {
-                  event.reject!.call({'status_code': 607});
+                  if (event.reject != null) {
+                    event.reject!.call({'status_code': 607});
+                  }
                   Navigator.of(context).pop();
                 },
               ),
               TextButton(
                 child: const Text('OK'),
                 onPressed: () {
-                  event.accept!.call({});
-                  setState(() {
-                    call!.voiceOnly = false;
+                  if (event.accept != null) {
+                    event.accept!.call({});
+                  }
+                  if (call != null) {
+                    setState(() {
+                      call!.voiceOnly = false;
+                    });
                     _resizeLocalVideo();
-                  });
+                  }
                   Navigator.of(context).pop();
                 },
               ),
