@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:dart_sip_ua_example/src/providers.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:logger/logger.dart';
@@ -15,6 +14,8 @@ import 'widgets/vpn_status_indicator.dart';
 import 'widgets/vpn_requirement_dialog.dart';
 import 'recent_calls.dart';
 import 'websocket_connection_manager.dart';
+import 'unified_call_screen.dart';
+import 'vpn_manager.dart';
 
 class DialPadWidget extends ConsumerStatefulWidget {
   final SIPUAHelper? _helper;
@@ -59,8 +60,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     print('📊 DialPad: SIP listener added for UI updates');
   }
 
-  Future<Widget?> _handleCall(BuildContext context,
-      [bool voiceOnly = false]) async {
+  Future<Widget?> _handleCall(BuildContext context) async {
     // Hide keyboard when starting a call
     FocusScope.of(context).unfocus();
     
@@ -117,39 +117,18 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     
     print('✅ VPN is connected - proceeding with WebSocket call');
 
+    // Audio-only call constraints
     var mediaConstraints = <String, dynamic>{
       'audio': true,
-      'video': {
-        'mandatory': <String, dynamic>{
-          'minWidth': '640',
-          'minHeight': '480',
-          'minFrameRate': '30',
-        },
-        'facingMode': 'user',
-      }
+      'video': false, // Always false for audio-only app
     };
 
     MediaStream mediaStream;
 
     try {
-      if (kIsWeb && !voiceOnly) {
-        mediaStream =
-            await navigator.mediaDevices.getDisplayMedia(mediaConstraints);
-        mediaConstraints['video'] = false;
-        MediaStream userStream =
-            await navigator.mediaDevices.getUserMedia(mediaConstraints);
-        final audioTracks = userStream.getAudioTracks();
-        if (audioTracks.isNotEmpty) {
-          mediaStream.addTrack(audioTracks.first, addToNative: true);
-        }
-      } else {
-        if (voiceOnly) {
-          mediaConstraints['video'] = !voiceOnly;
-        }
-        print('🔄 Requesting media access with constraints: $mediaConstraints');
-        mediaStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
-        print('✅ Media stream obtained successfully');
-      }
+      print('🔄 Requesting audio media access with constraints: $mediaConstraints');
+      mediaStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+      print('✅ Audio stream obtained successfully');
     } catch (e) {
       print('❌ Media access error: $e');
       
@@ -168,7 +147,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
       return null;
     }
 
-    print('🚀 Initiating call to: $dest (voice only: $voiceOnly)');
+    print('🚀 Initiating audio call to: $dest');
     print('📞 SIP Helper registered: ${helper!.registered}');
     print('📞 SIP Helper state: ${helper!.registerState.state}');
     
@@ -186,7 +165,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     try {
       // Store the call initiation - helper.call() returns Future<bool>
       print('🚀 About to call helper!.call()...');
-      final callResult = await helper!.call(dest, voiceOnly: voiceOnly, mediaStream: mediaStream);
+      final callResult = await helper!.call(dest, voiceOnly: true, mediaStream: mediaStream);
       print('📞 Call initiation result: $callResult');
       
       _preferences.setString('dest', dest);
@@ -202,19 +181,9 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
       Timer(Duration(milliseconds: 1000), () {
         print('🔍 Attempting navigation after call initiation...');
         
-        // Try navigation without arguments first (call screen can handle null call)
-        try {
-          Navigator.pushNamed(context, '/callscreen');
-          print('✅ Navigation to call screen successful!');
-        } catch (e) {
-          print('❌ Navigation to call screen failed: $e');
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to open call screen: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+        // Wait for call object to be created, then navigate
+        print('⏳ Waiting for call object creation...');
+        // We'll navigate when we receive the call state change event
       });
       
       print('✅ Call setup completed - waiting for SIP events...');
@@ -707,14 +676,30 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     try {
       // Test navigation without arguments first
       print('🧪 Test 1: Navigation without arguments');
-      Navigator.pushNamed(context, '/callscreen').then((_) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => UnifiedCallScreen(
+            helper: helper,
+            call: null,
+          ),
+        ),
+      ).then((_) {
         print('✅ Navigation without arguments successful!');
       }).catchError((e) {
         print('❌ Navigation without arguments failed: $e');
         
         // Test navigation with null argument
         print('🧪 Test 2: Navigation with null argument');
-        Navigator.pushNamed(context, '/callscreen', arguments: null).then((_) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => UnifiedCallScreen(
+              helper: helper,
+              call: null,
+            ),
+          ),
+        ).then((_) {
           print('✅ Navigation with null argument successful!');
         }).catchError((e) {
           print('❌ Navigation with null argument failed: $e');
@@ -849,6 +834,126 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     }
   }
 
+  Future<void> _connectVPNManually() async {
+    // Show loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 16),
+            Text('Connecting VPN'),
+          ],
+        ),
+        content: Text('Please wait while VPN connection is established...'),
+      ),
+    );
+
+    try {
+      print('🔐 Manual VPN connection requested...');
+      
+      // Create VPN manager instance
+      final vpnManager = VPNManager();
+      await vpnManager.initialize();
+      
+      print('📊 VPN Manual Connection Status:');
+      print('  - Configured: ${vpnManager.isConfigured}');
+      print('  - Currently connected: ${vpnManager.isConnected}');
+      
+      if (!vpnManager.isConfigured) {
+        Navigator.pop(context); // Close loading dialog
+        
+        // Show configuration needed dialog
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.vpn_key, color: Colors.orange),
+                SizedBox(width: 8),
+                Text('VPN Configuration Required'),
+              ],
+            ),
+            content: Text(
+              'VPN is not configured yet. Would you like to configure it now?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  Navigator.pushNamed(context, '/vpn-config');
+                },
+                child: Text('Configure VPN'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+
+      if (vpnManager.isConnected) {
+        Navigator.pop(context); // Close loading dialog
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('VPN is already connected!'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+        return;
+      }
+
+      // Attempt connection
+      print('🚀 Starting manual VPN connection...');
+      final success = await vpnManager.connect();
+      
+      Navigator.pop(context); // Close loading dialog
+      
+      if (success) {
+        print('✅ Manual VPN connection successful!');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('VPN connected successfully!'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      } else {
+        print('❌ Manual VPN connection failed');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('VPN connection failed. Check your configuration.'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+      
+    } catch (e) {
+      print('❌ Manual VPN connection error: $e');
+      Navigator.pop(context); // Close loading dialog
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('VPN connection error: $e'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
   List<Widget> _buildDialPad() {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
@@ -938,19 +1043,14 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
         padding: const EdgeInsets.symmetric(horizontal: 20),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            ActionButton(
-              icon: Icons.videocam_outlined,
-              title: 'Video',
-              onPressed: () => _handleCall(context),
-            ),
             ActionButton(
               icon: Icons.call,
               title: 'Call',
               fillColor: theme.colorScheme.primary,
               checked: true,
-              onPressed: () => _handleCall(context, true),
+              onPressed: () => _handleCall(context),
             ),
             ActionButton(
               icon: Icons.backspace_outlined,
@@ -1086,6 +1186,15 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
                         onTap: () {
                           Navigator.pop(context);
                           Navigator.pushNamed(context, '/vpn-config');
+                        },
+                      ),
+                      ListTile(
+                        leading: Icon(Icons.vpn_lock),
+                        title: Text('Connect VPN Now'),
+                        subtitle: Text('Manually connect VPN for testing'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _connectVPNManually();
                         },
                       ),
                     ],
@@ -1265,7 +1374,15 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
       print('📊 Previous call: $_currentCallId, navigated: $_hasNavigatedToCallScreen');
       
       try {
-        Navigator.pushNamed(context, '/callscreen', arguments: call).then((_) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => UnifiedCallScreen(
+              helper: helper,
+              call: call,
+            ),
+          ),
+        ).then((_) {
           // Reset flags when returning from call screen
           print('🔙 Returned from call screen - resetting navigation flags');
           _hasNavigatedToCallScreen = false;

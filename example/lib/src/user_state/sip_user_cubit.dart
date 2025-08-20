@@ -1,6 +1,6 @@
 import 'package:bloc/bloc.dart';
 import 'package:dart_sip_ua_example/src/user_state/sip_user.dart';
-import 'package:dart_sip_ua_example/src/background_service.dart';
+import 'package:dart_sip_ua_example/src/persistent_background_service.dart';
 import 'package:dart_sip_ua_example/src/websocket_connection_manager.dart';
 import 'package:sip_ua/sip_ua.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -126,7 +126,7 @@ class SipUserCubit extends Cubit<SipUser?> implements SipUaHelperListener {
         _markAsRegistered();
         _saveUser(this.state!);
         // Start background service when successfully registered
-        BackgroundService.startService();
+        PersistentBackgroundService.startService();
         print('Registration successful - saved user data and started background service');
       }
     } else if (state.state == RegistrationStateEnum.UNREGISTERED ||
@@ -135,7 +135,7 @@ class SipUserCubit extends Cubit<SipUser?> implements SipUaHelperListener {
       // ConnectionManager will handle reconnection attempts automatically
       
       // Stop background service when unregistered
-      BackgroundService.stopService();
+      PersistentBackgroundService.stopService();
       print('Registration failed/unregistered - ConnectionManager will handle reconnection');
     }
   }

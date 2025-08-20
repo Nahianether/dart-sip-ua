@@ -4,7 +4,7 @@ import 'package:sip_ua/sip_ua.dart';
 import 'package:logger/logger.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'user_state/sip_user.dart';
-import 'background_service.dart';
+import 'persistent_background_service.dart';
 import 'vpn_manager.dart';
 
 /// Simple WebSocket-only SIP connection manager
@@ -84,6 +84,9 @@ class WebSocketConnectionManager implements SipUaHelperListener {
     _sipHelper.addSipUaHelperListener(this);
     await _saveConnectionSettings(user);
     await _connectWithRetry();
+    
+    // Update background service with new user configuration
+    await PersistentBackgroundService.updateSipUserInService(user);
   }
 
   Future<void> _connectWithRetry() async {
@@ -239,7 +242,7 @@ class WebSocketConnectionManager implements SipUaHelperListener {
     _sipHelper.stop();
     
     await _clearConnectionSettings();
-    BackgroundService.stopService();
+    PersistentBackgroundService.stopService();
   }
 
   /// Force reconnection
@@ -326,7 +329,7 @@ class WebSocketConnectionManager implements SipUaHelperListener {
       case RegistrationStateEnum.REGISTERED:
         _logger.i('✅ WebSocket SIP Registration Successful!');
         _reconnectionAttempts = 0;
-        BackgroundService.startService();
+        PersistentBackgroundService.startService();
         break;
         
       case RegistrationStateEnum.UNREGISTERED:
