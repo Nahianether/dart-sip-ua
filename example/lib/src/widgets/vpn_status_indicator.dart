@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import '../connection_manager.dart';
+import '../websocket_connection_manager.dart';
 import '../vpn_manager.dart';
 
 /// Widget to show VPN connection status
 class VPNStatusIndicator extends StatefulWidget {
-  final ConnectionManager? connectionManager;
+  final WebSocketConnectionManager? connectionManager;
   
   const VPNStatusIndicator({
     Key? key,
@@ -18,12 +18,12 @@ class VPNStatusIndicator extends StatefulWidget {
 
 class _VPNStatusIndicatorState extends State<VPNStatusIndicator> {
   VpnConnectionStatus _status = VpnConnectionStatus.disconnected;
-  late ConnectionManager _connectionManager;
+  late WebSocketConnectionManager _connectionManager;
 
   @override
   void initState() {
     super.initState();
-    _connectionManager = widget.connectionManager ?? ConnectionManager();
+    _connectionManager = widget.connectionManager ?? WebSocketConnectionManager();
     
     // Set up status listener first
     try {

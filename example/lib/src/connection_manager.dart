@@ -503,18 +503,17 @@ shWr8WQLs62E90vQhhZbhAB+PW6GhwkBWQ==
         await Future.delayed(Duration(milliseconds: 500)); // Short delay
       }
       
-      // Step 1: Connect VPN first if configured and should auto-connect
+      // VPN connection for WebSocket (optional)
       if (_vpnManager?.isConfigured == true && _vpnManager?.shouldAutoConnect == true) {
         _logger.i('🔐 VPN auto-connect enabled, connecting VPN first...');
         final vpnConnected = await _connectVPN();
         if (!vpnConnected) {
           _logger.w('❌ VPN connection failed, but proceeding with direct connection');
-          // Don't throw error - allow direct connection if VPN fails
         } else {
           _logger.i('✅ VPN connected successfully');
         }
       } else {
-        _logger.i('ℹ️ VPN not configured or auto-connect disabled, using direct connection');
+        _logger.i('ℹ️ Using direct WebSocket connection (no VPN)');
       }
       
       // Step 2: Connect SIP

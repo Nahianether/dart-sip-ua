@@ -14,7 +14,7 @@ import 'widgets/action_button.dart';
 import 'widgets/vpn_status_indicator.dart';
 import 'widgets/vpn_requirement_dialog.dart';
 import 'recent_calls.dart';
-import 'connection_manager.dart';
+import 'websocket_connection_manager.dart';
 
 class DialPadWidget extends ConsumerStatefulWidget {
   final SIPUAHelper? _helper;
@@ -93,16 +93,15 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
       return null;
     }
 
-    // Check VPN connection requirement
-    final connectionManager = ConnectionManager();
-    final vpnManager = connectionManager.vpnManager;
+    // Check VPN connection requirement for WebSocket
+    final connectionManager = WebSocketConnectionManager();
     
-    if (!vpnManager.isConnected) {
+    if (!connectionManager.isVpnConnected) {
       print('🔐 VPN not connected - showing requirement dialog');
       
       await showVPNRequirementDialog(
         context,
-        customMessage: 'VPN connection is required to make secure SIP calls. Please connect to VPN first.',
+        customMessage: 'VPN connection is required to make secure WebSocket SIP calls. Please connect to VPN first.',
         onConfigureVPN: () {
           Navigator.pushNamed(context, '/vpn-config');
         },
@@ -116,7 +115,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
       return null;
     }
     
-    print('✅ VPN is connected - proceeding with call');
+    print('✅ VPN is connected - proceeding with WebSocket call');
 
     var mediaConstraints = <String, dynamic>{
       'audio': true,
@@ -734,7 +733,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
   }
 
   void _showConnectionStatus() {
-    final connectionManager = ConnectionManager();
+    final connectionManager = WebSocketConnectionManager();
     
     // Perform immediate status check
     connectionManager.performConnectionStatusCheck();
@@ -994,7 +993,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
               style: theme.textTheme.headlineMedium,
             ),
             VPNStatusIndicator(
-              connectionManager: ConnectionManager(),
+              connectionManager: WebSocketConnectionManager(),
             ),
           ],
         ),
@@ -1333,18 +1332,17 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     final currentUserCubit = ref.read(sipUserCubitProvider);
     if (currentUserCubit.state == null) return;
     
-    // Check VPN requirement before re-registration
-    final connectionManager = ConnectionManager();
-    final vpnManager = connectionManager.vpnManager;
+    // Check VPN requirement before WebSocket re-registration
+    final connectionManager = WebSocketConnectionManager();
     
-    if (!vpnManager.isConnected) {
-      _logger.w('🔐 VPN not connected - cannot re-register to SIP server');
+    if (!connectionManager.isVpnConnected) {
+      _logger.w('🔐 VPN not connected - cannot re-register to WebSocket SIP server');
       
       // Show VPN requirement dialog in the context if available
       if (mounted) {
         await showVPNRequirementDialog(
           context,
-          customMessage: 'VPN connection is required to connect to SIP server. Please connect to VPN first.',
+          customMessage: 'VPN connection is required to connect to WebSocket SIP server. Please connect to VPN first.',
           onConfigureVPN: () {
             Navigator.pushNamed(context, '/vpn-config');
           },
@@ -1357,7 +1355,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     }
     
     if (helper!.registered) await helper!.unregister();
-    _logger.i("Re-registering with VPN connected");
+    _logger.i("Re-registering with VPN connected via WebSocket");
     currentUserCubit.register(currentUserCubit.state!);
   }
 
@@ -1365,7 +1363,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
   String _getStatusTitle(RegistrationStateEnum? state) {
     // Check if we have a saved user but are not connected
     final sipUserCubit = ref.read(sipUserCubitProvider);
-    final connectionManager = ConnectionManager();
+    final connectionManager = WebSocketConnectionManager();
     
     if (sipUserCubit.state != null) {
       switch (state) {
@@ -1419,7 +1417,7 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
       return RegistrationStateEnum.REGISTERED;
     } else if (hasUser) {
       // Has saved user but not connected - check if it's a failure or just connecting
-      final connectionManager = ConnectionManager();
+      final connectionManager = WebSocketConnectionManager();
       if (connectionManager.shouldMaintainConnection) {
         return RegistrationStateEnum.UNREGISTERED; // Will show "Auto-connecting"
       } else {

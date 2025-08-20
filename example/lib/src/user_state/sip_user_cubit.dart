@@ -1,18 +1,18 @@
 import 'package:bloc/bloc.dart';
 import 'package:dart_sip_ua_example/src/user_state/sip_user.dart';
 import 'package:dart_sip_ua_example/src/background_service.dart';
-import 'package:dart_sip_ua_example/src/connection_manager.dart';
+import 'package:dart_sip_ua_example/src/websocket_connection_manager.dart';
 import 'package:sip_ua/sip_ua.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SipUserCubit extends Cubit<SipUser?> implements SipUaHelperListener {
   final SIPUAHelper sipHelper;
-  late final ConnectionManager _connectionManager;
+  late final WebSocketConnectionManager _connectionManager;
   bool _isRegistered = false;
   
   SipUserCubit({required this.sipHelper}) : super(null) {
     // DO NOT add SIP listener here - let ConnectionManager handle it exclusively
-    _connectionManager = ConnectionManager();
+    _connectionManager = WebSocketConnectionManager();
     _connectionManager.initialize(sipHelper);
     
     // Set up callbacks from ConnectionManager to update UI
