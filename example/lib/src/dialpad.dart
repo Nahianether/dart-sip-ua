@@ -1412,6 +1412,17 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     print('📞 Call direction: ${call.direction}');
     print('📞 Call remote identity: ${call.remote_identity}');
     print('📞 Call local identity: ${call.local_identity}');
+    print('📞 Registration status: ${helper?.registered}');
+    print('📞 Helper available: ${helper != null}');
+    
+    // Special logging for incoming calls
+    if (call.direction == Direction.incoming) {
+      print('📥📥📥 INCOMING CALL DETECTED! 📥📥📥');
+      print('📥 From: ${call.remote_identity}');
+      print('📥 To: ${call.local_identity}');
+      print('📥 State: ${callState.state}');
+      print('📥 Time: ${DateTime.now()}');
+    }
     
     switch (callState.state) {
       case CallStateEnum.CALL_INITIATION:

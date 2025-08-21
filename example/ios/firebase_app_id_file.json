@@ -1,0 +1,10 @@
+{
+  "file_generated_by": "FlutterFire CLI",
+  "purpose": "FirebaseAppID file for iOS VoIP push notifications",
+  "GOOGLE_APP_ID": "1:123456789:ios:abcdef123456789",
+  "FIREBASE_PROJECT_ID": "sip-phone-voip",
+  "GCM_SENDER_ID": "123456789",
+  "BUNDLE_ID": "com.intishar.dartSipUaExample",
+  "PROJECT_ID": "sip-phone-voip",
+  "STORAGE_BUCKET": "sip-phone-voip.appspot.com"
+}

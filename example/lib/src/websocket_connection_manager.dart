@@ -177,7 +177,10 @@ class WebSocketConnectionManager implements SipUaHelperListener {
     settings.userAgent = 'Flutter WebSocket SIP Client';
     settings.dtmfMode = DtmfMode.RFC2833;
     settings.register = true;
-    settings.register_expires = 300;
+    settings.register_expires = 600; // Increase to 10 minutes for stability
+    
+    // Enable session timers for connection stability
+    settings.sessionTimers = true;
     
     // Set host from WebSocket URL
     try {

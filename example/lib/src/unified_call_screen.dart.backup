@@ -25,7 +25,8 @@ class UnifiedCallScreen extends StatefulWidget {
   State<UnifiedCallScreen> createState() => _UnifiedCallScreenState();
 }
 
-class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaHelperListener {
+class _UnifiedCallScreenState extends State<UnifiedCallScreen>
+    implements SipUaHelperListener {
   // Call state management
   CallStateEnum _callState = CallStateEnum.NONE;
   bool _callConfirmed = false;
@@ -63,7 +64,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
     // Check if we need to use the background service's SIP helper for this call
     final backgroundHelper = PersistentBackgroundService.getBackgroundSipHelper();
     final activeCall = PersistentBackgroundService.getActiveCall();
-
+    
     if (call != null && activeCall != null && call!.id == activeCall.id && backgroundHelper != null) {
       print('🔄 Using background SIP helper for active call: ${call!.id}');
       // Use the background service's SIP helper instead of the main app's
@@ -86,17 +87,17 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
       _callState = call!.state;
       print('📞 Initial call state: $_callState');
       print('📞 Call source: ${call!.direction == Direction.incoming ? 'Incoming' : 'Outgoing'}');
-
+      
       // Start ringing for incoming calls
-      if (call!.direction == Direction.incoming &&
+      if (call!.direction == Direction.incoming && 
           (_callState == CallStateEnum.CALL_INITIATION || _callState == CallStateEnum.PROGRESS)) {
         print('🔔 Starting ringtone for incoming call');
         RingtoneService.startRinging();
       }
-
+      
       // If this is an incoming call that's already answered by background service,
       // update the state and start timer
-      if (call!.direction == Direction.incoming &&
+      if (call!.direction == Direction.incoming && 
           (_callState == CallStateEnum.ACCEPTED || _callState == CallStateEnum.CONFIRMED)) {
         print('🔄 Taking over background-accepted call');
         _callConfirmed = true;
@@ -141,7 +142,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
     } catch (e) {
       print('❌ Error stopping ringtone: $e');
     }
-
+    
     try {
       if (helper != null) {
         helper!.removeSipUaHelperListener(this);
@@ -183,7 +184,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
     final hours = duration.inHours;
     final minutes = duration.inMinutes.remainder(60);
     final seconds = duration.inSeconds.remainder(60);
-
+    
     if (hours > 0) {
       return '$hours:${twoDigits(minutes)}:${twoDigits(seconds)}';
     }
@@ -197,7 +198,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
     try {
       // Stop ringing immediately
       RingtoneService.stopRinging();
-
+      
       // Audio-only call constraints
       final mediaConstraints = <String, dynamic>{
         'audio': true,
@@ -214,11 +215,11 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
 
   void _handleDecline() {
     if (call == null) return;
-
+    
     try {
       // Stop ringing immediately
       RingtoneService.stopRinging();
-
+      
       call!.hangup({'status_code': 486}); // Busy here
       print('✅ Call declined');
     } catch (e) {
@@ -343,7 +344,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
 
   void _showError(String message) {
     if (!mounted) return;
-
+    
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
@@ -380,11 +381,12 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
     if (_hold) {
       return 'Paused by ${_holdOriginator?.name ?? 'remote party'}';
     }
-
+    
     switch (_callState) {
       case CallStateEnum.CONNECTING:
       case CallStateEnum.PROGRESS:
-        return direction == Direction.incoming ? 'Swipe to answer or decline' : 'Waiting for answer...';
+        return direction == Direction.incoming ? 
+          'Swipe to answer or decline' : 'Waiting for answer...';
       case CallStateEnum.CONFIRMED:
         return 'Connected • Audio Only';
       case CallStateEnum.ENDED:
@@ -398,7 +400,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
 
   Color _getStateColor() {
     if (_hold) return Colors.orange;
-
+    
     switch (_callState) {
       case CallStateEnum.CONFIRMED:
         return Colors.green;
@@ -414,20 +416,19 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
   bool _shouldShowCallControls() {
     // If we have a call object and it's not an incoming call waiting to be answered
     final hasCall = call != null;
-    final isActiveCall = _callState == CallStateEnum.CONFIRMED ||
-        _callState == CallStateEnum.ACCEPTED ||
-        _callState == CallStateEnum.CONNECTING ||
-        _callState == CallStateEnum.STREAM;
-
+    final isActiveCall = _callState == CallStateEnum.CONFIRMED || 
+                        _callState == CallStateEnum.ACCEPTED ||
+                        _callState == CallStateEnum.CONNECTING ||
+                        _callState == CallStateEnum.STREAM;
+    
     // Also show controls if this is a background call that was already answered
-    final isBackgroundCall = hasCall &&
-        call!.direction == Direction.incoming &&
-        (_callState != CallStateEnum.NONE &&
-            _callState != CallStateEnum.CALL_INITIATION &&
-            _callState != CallStateEnum.PROGRESS);
-
+    final isBackgroundCall = hasCall && call!.direction == Direction.incoming && 
+                           (_callState != CallStateEnum.NONE && 
+                            _callState != CallStateEnum.CALL_INITIATION && 
+                            _callState != CallStateEnum.PROGRESS);
+    
     final shouldShow = hasCall && (isActiveCall || isBackgroundCall);
-
+    
     print('🎛️ Call Controls Debug:');
     print('  - Has call: $hasCall (ID: ${call?.id})');
     print('  - Call state: $_callState');
@@ -436,15 +437,15 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
     print('  - Is active: $isActiveCall');
     print('  - Is background: $isBackgroundCall');
     print('  - Should show: $shouldShow');
-
+    
     return shouldShow;
   }
 
   bool _shouldShowIncomingControls() {
-    final shouldShow = direction == Direction.incoming &&
-        (_callState == CallStateEnum.NONE ||
-            _callState == CallStateEnum.CALL_INITIATION ||
-            _callState == CallStateEnum.PROGRESS);
+    final shouldShow = direction == Direction.incoming && 
+                      (_callState == CallStateEnum.NONE ||
+                       _callState == CallStateEnum.CALL_INITIATION ||
+                       _callState == CallStateEnum.PROGRESS);
     print('📞 Should show incoming controls: $shouldShow (Direction: $direction, State: $_callState)');
     return shouldShow;
   }
@@ -455,7 +456,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
     print('📞 UnifiedCallScreen: Call state changed: ${state.state}');
     print('📞 Call ID: ${call.id}, Widget Call ID: ${this.call?.id}');
     print('📞 Call object match: ${call.id == this.call?.id}');
-
+    
     if (!mounted) return;
 
     setState(() {
@@ -492,7 +493,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
 
   @override
   void transportStateChanged(TransportState state) {
-    // Not needed for call screen
+    // Not needed for call screen  
   }
 
   @override
@@ -516,6 +517,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
 
   @override
   Widget build(BuildContext context) {
+    
     return Scaffold(
       backgroundColor: Colors.black,
       extendBodyBehindAppBar: true,
@@ -579,96 +581,94 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
               // Main call info area
               Expanded(
                 flex: 3,
-                child: Container(
-                  width: double.infinity,
-                  padding: EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      // Contact avatar
-                      Container(
-                        width: 120,
-                        height: 120,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: _getStateColor().withValues(alpha: 0.2),
-                          border: Border.all(
-                            color: _getStateColor(),
-                            width: 3,
-                          ),
-                        ),
-                        child: Icon(
-                          Icons.person,
-                          size: 60,
-                          color: _getStateColor(),
-                        ),
+            child: Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(24),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Contact avatar
+                  Container(
+                    width: 120,
+                    height: 120,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _getStateColor().withValues(alpha: 0.2),
+                      border: Border.all(
+                        color: _getStateColor(),
+                        width: 3,
                       ),
-                      SizedBox(height: 24),
-
-                      // Contact name
-                      Text(
-                        remoteIdentity ?? 'Unknown',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                      SizedBox(height: 8),
-
-                      // Call state subtitle
-                      Text(
-                        _getCallStateSubtitle(),
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Colors.white70,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-
-                      // DTMF input display
-                      if (_showKeypad && _dtmfInput.isNotEmpty) ...[
-                        SizedBox(height: 16),
-                        Container(
-                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            _dtmfInput,
-                            style: TextStyle(
-                              fontSize: 18,
-                              color: Colors.white,
-                              fontFamily: 'monospace',
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
+                    ),
+                    child: Icon(
+                      Icons.person,
+                      size: 60,
+                      color: _getStateColor(),
+                    ),
                   ),
-                ),
-              ),
+                  SizedBox(height: 24),
+                  
+                  // Contact name
+                  Text(
+                    remoteIdentity ?? 'Unknown',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  SizedBox(height: 8),
+                  
+                  // Call state subtitle
+                  Text(
+                    _getCallStateSubtitle(),
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.white70,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
 
-              // Keypad (when visible)
-              if (_showKeypad)
-                Expanded(
-                  flex: 2,
-                  child: _buildKeypad(),
-                ),
-
-              // Bottom controls
-              Expanded(
-                flex: 1,
-                child: Container(
-                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                  child: _buildBottomControls(),
-                ),
+                  // DTMF input display
+                  if (_showKeypad && _dtmfInput.isNotEmpty) ...[
+                    SizedBox(height: 16),
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha:0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        _dtmfInput,
+                        style: TextStyle(
+                          fontSize: 18,
+                          color: Colors.white,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
-            ],
+            ),
           ),
-        ),
+
+          // Keypad (when visible)
+          if (_showKeypad)
+            Expanded(
+              flex: 2,
+              child: _buildKeypad(),
+            ),
+
+          // Bottom controls
+          Expanded(
+            flex: 1,
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              child: _buildBottomControls(),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -705,7 +705,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
             ],
           ),
           SizedBox(height: 8),
-
+          
           // Keypad grid
           Expanded(
             child: Column(
@@ -719,7 +719,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
                           child: ElevatedButton(
                             onPressed: () => _sendDTMF(digit),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.white.withValues(alpha: 0.1),
+                              backgroundColor: Colors.white.withValues(alpha:0.1),
                               foregroundColor: Colors.white,
                               shape: CircleBorder(),
                               padding: EdgeInsets.all(20),
@@ -748,7 +748,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
   Widget _buildBottomControls() {
     print('🎛️ Building bottom controls...');
     print('🎛️ Call state: $_callState, Direction: $direction');
-
+    
     // Incoming call controls
     if (_shouldShowIncomingControls()) {
       return Row(
@@ -761,7 +761,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
             fillColor: Colors.red,
             onPressed: _handleDecline,
           ),
-          // Accept button
+          // Accept button  
           ActionButton(
             title: "Accept",
             icon: Icons.call,
@@ -784,27 +784,27 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
               ActionButton(
                 title: _audioMuted ? "Unmute" : "Mute",
                 icon: _audioMuted ? Icons.mic_off : Icons.mic,
-                fillColor: _audioMuted ? Colors.red : Colors.white.withValues(alpha: 0.2),
+                fillColor: _audioMuted ? Colors.red : Colors.white.withValues(alpha:0.2),
                 onPressed: _toggleMute,
               ),
               // Speaker button
               ActionButton(
                 title: _speakerOn ? "Speaker" : "Speaker",
                 icon: _speakerOn ? Icons.volume_up : Icons.volume_down,
-                fillColor: _speakerOn ? Colors.blue : Colors.white.withValues(alpha: 0.2),
+                fillColor: _speakerOn ? Colors.blue : Colors.white.withValues(alpha:0.2),
                 onPressed: _toggleSpeaker,
               ),
               // Hold button
               ActionButton(
                 title: _hold ? "Unhold" : "Hold",
                 icon: _hold ? Icons.play_arrow : Icons.pause,
-                fillColor: _hold ? Colors.orange : Colors.white.withValues(alpha: 0.2),
+                fillColor: _hold ? Colors.orange : Colors.white.withValues(alpha:0.2),
                 onPressed: _toggleHold,
               ),
             ],
           ),
           SizedBox(height: 16),
-
+          
           // Second row of controls
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -813,7 +813,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
               ActionButton(
                 title: _showKeypad ? "Hide" : "Keypad",
                 icon: _showKeypad ? Icons.keyboard_hide : Icons.dialpad,
-                fillColor: _showKeypad ? Colors.blue : Colors.white.withValues(alpha: 0.2),
+                fillColor: _showKeypad ? Colors.blue : Colors.white.withValues(alpha:0.2),
                 onPressed: _toggleKeypad,
               ),
               // End call button

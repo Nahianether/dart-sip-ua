@@ -27,6 +27,9 @@ require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelpe
 
 flutter_ios_podfile_setup
 
+# Enable modular headers for Firebase compatibility
+use_modular_headers!
+
 target 'Runner' do
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
   target 'RunnerTests' do
@@ -37,5 +40,27 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+    
+    # Fix Firebase Swift module dependencies
+    target.build_configurations.each do |config|
+      # iOS deployment target
+      config.build_settings.delete 'IPHONEOS_DEPLOYMENT_TARGET'
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+      
+      # Swift version
+      config.build_settings['SWIFT_VERSION'] = '5.0'
+      
+      # Enable modular headers
+      config.build_settings['DEFINES_MODULE'] = 'YES'
+      
+      # Fix bridging header issues
+      config.build_settings.delete 'SWIFT_OBJC_BRIDGING_HEADER'
+      config.build_settings.delete 'SWIFT_INSTALL_OBJC_HEADER'
+      
+      # Framework compatibility
+      if target.name.include?('Firebase') || target.name.include?('Google')
+        config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+      end
+    end
   end
 end

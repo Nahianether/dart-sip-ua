@@ -75,11 +75,11 @@ class _MyRegisterWidget extends ConsumerState<RegisterWidget>
       // Set WebSocket defaults
       portController.text = _preferences.getString('port') ?? '8089';
       wsUriController.text = _preferences.getString('server_url') ?? 'wss://sip.ibos.io:8089/ws';
-      sipUriController.text = _preferences.getString('sip_uri') ?? '564613@sip.ibos.io';
+      sipUriController.text = _preferences.getString('sip_uri') ?? '564612@sip.ibos.io';
       
-      displayNameController.text = _preferences.getString('display_name') ?? '564613';
+      displayNameController.text = _preferences.getString('display_name') ?? '564612';
       passwordController.text = _preferences.getString('password') ?? 'iBOS123';
-      authorizationUserController.text = _preferences.getString('auth_user') ?? '564613';
+      authorizationUserController.text = _preferences.getString('auth_user') ?? '564612';
       
       print('📋 Settings loaded successfully');
     } catch (e) {
