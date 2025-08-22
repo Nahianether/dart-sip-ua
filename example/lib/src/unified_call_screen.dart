@@ -50,53 +50,142 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
   // Getters
   SIPUAHelper? get helper => widget.helper;
   Call? get call => widget.call;
-  String? get remoteIdentity => call?.remote_identity;
-  Direction? get direction => call?.direction;
+
+  // Get the current active call (could be from widget or background service)
+  Call? get currentCall {
+    final activeCall = PersistentBackgroundService.getActiveCall();
+    final incomingCall = PersistentBackgroundService.getIncomingCall();
+    // Prioritize background calls since they're more likely to be the active incoming call
+    return incomingCall ?? activeCall ?? call;
+  }
+
+  String? get remoteIdentity => currentCall?.remote_identity;
+  Direction? get direction => currentCall?.direction;
 
   @override
   void initState() {
     super.initState();
     _initializeCallScreen();
+    _enableFullScreenMode();
+  }
+
+  void _enableFullScreenMode() {
+    try {
+      // Enable full screen mode for incoming calls
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.immersive,
+        overlays: [SystemUiOverlay.top], // Keep status bar for better UX
+      );
+      print('📱 Full screen mode enabled for call screen');
+    } catch (e) {
+      print('❌ Error enabling full screen mode: $e');
+      // Fallback to manual mode
+      try {
+        SystemChrome.setEnabledSystemUIMode(
+          SystemUiMode.manual,
+          overlays: [SystemUiOverlay.top],
+        );
+        print('📱 Fallback to manual UI mode');
+      } catch (fallbackError) {
+        print('❌ Fallback UI mode also failed: $fallbackError');
+      }
+    }
   }
 
   void _initializeCallScreen() {
     // Check if we need to use the background service's SIP helper for this call
     final backgroundHelper = PersistentBackgroundService.getBackgroundSipHelper();
     final activeCall = PersistentBackgroundService.getActiveCall();
+    final incomingCall = PersistentBackgroundService.getIncomingCall();
 
-    if (call != null && activeCall != null && call!.id == activeCall.id && backgroundHelper != null) {
-      print('🔄 Using background SIP helper for active call: ${call!.id}');
-      // Use the background service's SIP helper instead of the main app's
+    // Try to find the correct call and helper - prioritize background calls
+    final callToUse = incomingCall ?? activeCall ?? call;
+    final helperToUse = backgroundHelper ?? helper;
+
+    print('🔍 CALL SCREEN INITIALIZATION DEBUG:');
+    print('  Background helper available: ${backgroundHelper != null}');
+    print('  Main helper available: ${helper != null}');
+    print('  Background active call: ${activeCall?.id} (${activeCall?.state})');
+    print('  Background incoming call: ${incomingCall?.id} (${incomingCall?.state})');
+    print('  Widget call: ${call?.id} (${call?.state})');
+    print('  Selected call: ${callToUse?.id} (${callToUse?.state})');
+    print('  Selected helper: ${helperToUse?.hashCode}');
+
+    if (callToUse != null && helperToUse != null) {
+      print('🔄 Using SIP helper for call: ${callToUse.id}');
+      print('🔄 Call state: ${callToUse.state}, Direction: ${callToUse.direction}');
+      print('🔄 Call remote: ${callToUse.remote_identity}');
+
       try {
-        backgroundHelper.addSipUaHelperListener(this);
-        print('✅ Added listener to background SIP helper');
-      } catch (e) {
-        print('⚠️ Warning: Could not add listener to background helper: $e');
-        // Fall back to main helper if available
-        if (helper != null) {
+        // Always add listener to the helper we're using
+        helperToUse.addSipUaHelperListener(this);
+        print('✅ Added listener to primary SIP helper');
+
+        // Also add listener to main helper if using background helper
+        if (backgroundHelper != null && helper != null && backgroundHelper != helper) {
           helper!.addSipUaHelperListener(this);
+          print('✅ Also added listener to main SIP helper');
+        }
+      } catch (e) {
+        print('⚠️ Warning: Could not add listener to helper: $e');
+      }
+
+      // Transfer control from background to main app
+      if (backgroundHelper != null && incomingCall != null) {
+        print('🔄 Transferring incoming call from background to main app');
+        PersistentBackgroundService.transferCallToMainApp();
+      }
+    } else {
+      print('⚠️ No call or helper available');
+      print('  CallToUse: ${callToUse?.id}');
+      print('  HelperToUse available: ${helperToUse != null}');
+
+      // Still add listeners to available helpers
+      if (backgroundHelper != null) {
+        try {
+          backgroundHelper.addSipUaHelperListener(this);
+          print('✅ Added listener to background helper');
+        } catch (e) {
+          print('⚠️ Could not add listener to background helper: $e');
         }
       }
-      PersistentBackgroundService.transferCallToMainApp();
-    } else if (helper != null) {
-      helper!.addSipUaHelperListener(this);
+      if (helper != null) {
+        try {
+          helper!.addSipUaHelperListener(this);
+          print('✅ Added listener to main helper');
+        } catch (e) {
+          print('⚠️ Could not add listener to main helper: $e');
+        }
+      }
     }
 
-    if (call != null) {
-      _callState = call!.state;
-      print('📞 Initial call state: $_callState');
-      print('📞 Call source: ${call!.direction == Direction.incoming ? 'Incoming' : 'Outgoing'}');
+    // Use the call from background service if our widget call is null
+    final currentCall = call ?? activeCall ?? incomingCall;
 
-      // Start ringing for incoming calls
-      if (call!.direction == Direction.incoming &&
-          (_callState == CallStateEnum.CALL_INITIATION || _callState == CallStateEnum.PROGRESS)) {
-        print('🔔 Starting ringtone for incoming call');
+    print('🔍 CALL RESOLUTION DEBUG:');
+    print('  Widget call: ${call?.id} (${call?.direction}, ${call?.state})');
+    print('  Active call: ${activeCall?.id} (${activeCall?.direction}, ${activeCall?.state})');
+    print('  Incoming call: ${incomingCall?.id} (${incomingCall?.direction}, ${incomingCall?.state})');
+    print('  Final call: ${currentCall?.id} (${currentCall?.direction}, ${currentCall?.state})');
+
+    if (currentCall != null) {
+      _callState = currentCall.state;
+      print('📞 Initial call state: $_callState');
+      print('📞 Call source: ${currentCall.direction == Direction.incoming ? 'Incoming' : 'Outgoing'}');
+      print('📞 Call ID: ${currentCall.id}, Remote: ${currentCall.remote_identity}');
+
+      // Start ringing for incoming calls that are still ringing
+      if (currentCall.direction == Direction.incoming &&
+          (_callState == CallStateEnum.CALL_INITIATION ||
+              _callState == CallStateEnum.PROGRESS ||
+              _callState == CallStateEnum.NONE)) {
+        print('🔔 Starting ringtone for incoming call (state: $_callState)');
         RingtoneService.startRinging();
       }
 
       // If this is an incoming call that's already answered by background service,
       // update the state and start timer
-      if (call!.direction == Direction.incoming &&
+      if (currentCall.direction == Direction.incoming &&
           (_callState == CallStateEnum.ACCEPTED || _callState == CallStateEnum.CONFIRMED)) {
         print('🔄 Taking over background-accepted call');
         _callConfirmed = true;
@@ -104,7 +193,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
         RingtoneService.stopRinging(); // Stop ringing if call already answered
       }
     } else {
-      print('⚠️ No call object provided to UnifiedCallScreen');
+      print('⚠️ No call object available to UnifiedCallScreen');
     }
 
     _initProximitySensor();
@@ -146,6 +235,12 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
       if (helper != null) {
         helper!.removeSipUaHelperListener(this);
       }
+
+      // Also try to remove from background helper if it exists
+      final backgroundHelper = PersistentBackgroundService.getBackgroundSipHelper();
+      if (backgroundHelper != null) {
+        backgroundHelper.removeSipUaHelperListener(this);
+      }
     } catch (e) {
       print('❌ Error removing SIP listener: $e');
     }
@@ -158,7 +253,9 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
 
     try {
       _proximitySubscription?.cancel();
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: SystemUiOverlay.values);
+      // Restore normal UI mode
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: [SystemUiOverlay.top, SystemUiOverlay.bottom]);
+      print('📱 UI mode restored to normal');
     } catch (e) {
       print('❌ Error cleaning up proximity sensor: $e');
     }
@@ -192,10 +289,39 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
 
   // Call control actions
   void _handleAccept() async {
-    if (call == null) return;
+    print('🟢 ACCEPT BUTTON PRESSED');
 
     try {
+      // Get the SIP helper - prefer background helper if available
+      final backgroundHelper = PersistentBackgroundService.getBackgroundSipHelper();
+      final helperToUse = backgroundHelper ?? helper;
+
+      if (helperToUse == null) {
+        print('❌ No SIP helper available');
+        _showError('No SIP connection available');
+        return;
+      }
+
+      // Get the active call from background service or widget - prioritize background calls
+      final activeCall = PersistentBackgroundService.getActiveCall();
+      final incomingCall = PersistentBackgroundService.getIncomingCall();
+      final currentCall = incomingCall ?? activeCall ?? call;
+
+      print('🔍 ACCEPT DEBUG:');
+      print('  Helper: ${helperToUse.hashCode} (background: ${backgroundHelper != null})');
+      print('  Widget call: ${call?.id} (state: ${call?.state})');
+      print('  Active call: ${activeCall?.id} (state: ${activeCall?.state})');
+      print('  Incoming call: ${incomingCall?.id} (state: ${incomingCall?.state})');
+      print('  Using call: ${currentCall?.id} (state: ${currentCall?.state})');
+
+      if (currentCall == null) {
+        print('❌ No call available to accept');
+        _showError('No active call found to accept');
+        return;
+      }
+
       // Stop ringing immediately
+      print('🔇 Stopping ringtone...');
       RingtoneService.stopRinging();
 
       // Audio-only call constraints
@@ -204,8 +330,18 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
         'video': false, // Always false for audio-only
       };
 
-      call!.answer(mediaConstraints);
-      print('✅ Audio call accepted');
+      print('📞 Accepting call ${currentCall.id} with constraints: $mediaConstraints');
+      print('📞 Call remote identity: ${currentCall.remote_identity}');
+      print('📞 Call current state: ${currentCall.state}');
+      print('📞 Call direction: ${currentCall.direction}');
+
+      // Use the call's answer method
+      currentCall.answer(mediaConstraints);
+      print('✅ Audio call accepted for ${currentCall.remote_identity}');
+
+      // Don't immediately update UI state - wait for SIP events
+      // The callStateChanged handler will update the state appropriately
+      print('⏳ Waiting for SIP state change events...');
     } catch (e) {
       print('❌ Error accepting call: $e');
       _showError('Failed to accept call: $e');
@@ -213,21 +349,83 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
   }
 
   void _handleDecline() {
-    if (call == null) return;
+    print('🔴 DECLINE BUTTON PRESSED');
 
     try {
+      // Get the SIP helper - prefer background helper if available
+      final backgroundHelper = PersistentBackgroundService.getBackgroundSipHelper();
+      final helperToUse = backgroundHelper ?? helper;
+
+      if (helperToUse == null) {
+        print('❌ No SIP helper available');
+        _showError('No SIP connection available');
+        return;
+      }
+
+      // Get the active call from background service or widget - prioritize background calls
+      final activeCall = PersistentBackgroundService.getActiveCall();
+      final incomingCall = PersistentBackgroundService.getIncomingCall();
+      final currentCall = incomingCall ?? activeCall ?? call;
+
+      print('🔍 DECLINE DEBUG:');
+      print('  Helper: ${helperToUse.hashCode} (background: ${backgroundHelper != null})');
+      print('  Widget call: ${call?.id} (state: ${call?.state})');
+      print('  Active call: ${activeCall?.id} (state: ${activeCall?.state})');
+      print('  Incoming call: ${incomingCall?.id} (state: ${incomingCall?.state})');
+      print('  Using call: ${currentCall?.id} (state: ${currentCall?.state})');
+
+      if (currentCall == null) {
+        print('❌ No call available to decline');
+        _showError('No active call found to decline');
+        return;
+      }
+
       // Stop ringing immediately
+      print('🔇 Stopping ringtone...');
       RingtoneService.stopRinging();
 
-      call!.hangup({'status_code': 486}); // Busy here
-      print('✅ Call declined');
+      print('📞 Declining call ${currentCall.id}');
+      print('📞 Call remote identity: ${currentCall.remote_identity}');
+      print('📞 Call current state: ${currentCall.state}');
+      print('📞 Call direction: ${currentCall.direction}');
+
+      // For incoming calls, send busy/decline response
+      if (currentCall.direction == Direction.incoming) {
+        currentCall.hangup({'status_code': 486}); // Busy here
+        print('✅ Incoming call declined with 486 Busy Here');
+      } else {
+        currentCall.hangup({'status_code': 200}); // Normal hangup for outgoing calls
+        print('✅ Outgoing call terminated with 200 OK');
+      }
+
+      print('✅ Call declined for ${currentCall.remote_identity}');
+
+      // Clear any forwarded call from background service
+      PersistentBackgroundService.clearForwardedCall();
+
+      // Update UI state immediately
+      if (mounted) {
+        setState(() {
+          _callState = CallStateEnum.ENDED;
+        });
+      }
+
+      // Navigate back immediately for decline (user expects immediate response)
+      if (!_isNavigatingBack) {
+        print('🔙 Navigating back immediately after decline');
+        _navigateBack();
+      }
     } catch (e) {
       print('❌ Error declining call: $e');
+      _showError('Failed to decline call: $e');
     }
   }
 
   void _handleHangup() {
-    if (call == null) return;
+    // Get the active call from background service or widget
+    final activeCall = PersistentBackgroundService.getActiveCall();
+    final incomingCall = PersistentBackgroundService.getIncomingCall();
+    final currentCall = call ?? activeCall ?? incomingCall;
 
     try {
       _timer?.cancel();
@@ -236,8 +434,12 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
     }
 
     try {
-      call!.hangup({'status_code': 200});
-      print('✅ Call ended');
+      if (currentCall != null) {
+        currentCall.hangup({'status_code': 200});
+        print('✅ Call ended for ${currentCall.remote_identity}');
+      } else {
+        print('⚠️ No call to hang up');
+      }
     } catch (e) {
       print('❌ Error ending call: $e');
     }
@@ -251,14 +453,19 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
   }
 
   void _toggleMute() {
-    if (call == null) return;
+    // Get the active call from background service or widget
+    final activeCall = PersistentBackgroundService.getActiveCall();
+    final incomingCall = PersistentBackgroundService.getIncomingCall();
+    final currentCall = call ?? activeCall ?? incomingCall;
+
+    if (currentCall == null) return;
 
     setState(() {
       _audioMuted = !_audioMuted;
     });
 
     try {
-      call!.mute(_audioMuted, true); // mute audio, not video
+      currentCall.mute(_audioMuted, true); // mute audio, not video
       print('🔊 Audio ${_audioMuted ? 'muted' : 'unmuted'}');
     } catch (e) {
       print('❌ Error toggling mute: $e');
@@ -289,7 +496,12 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
   }
 
   void _toggleHold() {
-    if (call == null) return;
+    // Get the active call from background service or widget
+    final activeCall = PersistentBackgroundService.getActiveCall();
+    final incomingCall = PersistentBackgroundService.getIncomingCall();
+    final currentCall = call ?? activeCall ?? incomingCall;
+
+    if (currentCall == null) return;
 
     setState(() {
       _hold = !_hold;
@@ -297,10 +509,10 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
 
     try {
       if (_hold) {
-        call!.hold();
+        currentCall.hold();
         print('⏸️ Call put on hold');
       } else {
-        call!.unhold();
+        currentCall.unhold();
         print('▶️ Call resumed');
       }
     } catch (e) {
@@ -319,14 +531,19 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
   }
 
   void _sendDTMF(String digit) {
-    if (call == null) return;
+    // Get the active call from background service or widget
+    final activeCall = PersistentBackgroundService.getActiveCall();
+    final incomingCall = PersistentBackgroundService.getIncomingCall();
+    final currentCall = call ?? activeCall ?? incomingCall;
+
+    if (currentCall == null) return;
 
     setState(() {
       _dtmfInput += digit;
     });
 
     try {
-      call!.sendDTMF(digit);
+      currentCall.sendDTMF(digit);
       print('📱 DTMF sent: $digit');
     } catch (e) {
       print('❌ Error sending DTMF: $e');
@@ -446,6 +663,9 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
             _callState == CallStateEnum.CALL_INITIATION ||
             _callState == CallStateEnum.PROGRESS);
     print('📞 Should show incoming controls: $shouldShow (Direction: $direction, State: $_callState)');
+    print('📞 Current call: ${currentCall?.id}, Remote: ${currentCall?.remote_identity}');
+    print('📞 Widget call: ${call?.id}, Background active: ${PersistentBackgroundService.getActiveCall()?.id}');
+    print('📞 Background incoming: ${PersistentBackgroundService.getIncomingCall()?.id}');
     return shouldShow;
   }
 
@@ -454,26 +674,60 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
   void callStateChanged(Call call, CallState state) {
     print('📞 UnifiedCallScreen: Call state changed: ${state.state}');
     print('📞 Call ID: ${call.id}, Widget Call ID: ${this.call?.id}');
-    print('📞 Call object match: ${call.id == this.call?.id}');
+    print('📞 Call remote: ${call.remote_identity}');
+    print('📞 Call direction: ${call.direction}');
 
-    if (!mounted) return;
+    // Check if this is the call we're handling
+    final activeCall = PersistentBackgroundService.getActiveCall();
+    final incomingCall = PersistentBackgroundService.getIncomingCall();
+    final currentCall = this.call ?? activeCall ?? incomingCall;
 
+    final isRelevantCall = call.id == currentCall?.id || call.id == this.call?.id;
+
+    print('📞 Current call: ${currentCall?.id}');
+    print('📞 Is relevant call: $isRelevantCall');
+
+    if (!mounted || !isRelevantCall) {
+      print('📞 Ignoring call state change - not mounted or not relevant call');
+      return;
+    }
+
+    // Update state
     setState(() {
       _callState = state.state;
     });
 
     switch (state.state) {
       case CallStateEnum.ACCEPTED:
-      case CallStateEnum.CONFIRMED:
+        print('📞 Call ACCEPTED - stopping ringtone, starting timer');
+        RingtoneService.stopRinging();
         if (!_callConfirmed) {
           _callConfirmed = true;
           _startTimer();
-          print('⏱️ Call timer started');
+          print('⏱️ Call timer started for accepted call');
         }
         break;
-      case CallStateEnum.ENDED:
+      case CallStateEnum.CONFIRMED:
+        print('📞 Call CONFIRMED - ensuring timer is running');
+        RingtoneService.stopRinging();
+        if (!_callConfirmed) {
+          _callConfirmed = true;
+          _startTimer();
+          print('⏱️ Call timer started for confirmed call');
+        }
+        break;
       case CallStateEnum.FAILED:
-        print('📞 Call ended, navigating back');
+        print('📞 Call FAILED - stopping ringtone, navigating back');
+        RingtoneService.stopRinging();
+        Future.delayed(Duration(milliseconds: 1500), () {
+          if (mounted && !_isNavigatingBack) {
+            _navigateBack();
+          }
+        });
+        break;
+      case CallStateEnum.ENDED:
+        print('📞 Call ENDED - stopping ringtone, navigating back');
+        RingtoneService.stopRinging();
         Future.delayed(Duration(milliseconds: 1000), () {
           if (mounted && !_isNavigatingBack) {
             _navigateBack();
@@ -481,6 +735,7 @@ class _UnifiedCallScreenState extends State<UnifiedCallScreen> implements SipUaH
         });
         break;
       default:
+        print('📞 Call state: ${state.state} - no special handling');
         break;
     }
   }

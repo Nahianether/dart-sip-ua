@@ -15,9 +15,13 @@ class RingtoneService {
     // Play ringtone immediately
     _playRingtone();
     
-    // Continue ringing every 2 seconds
-    _ringtoneTimer = Timer.periodic(Duration(seconds: 2), (timer) {
-      _playRingtone();
+    // Continue ringing every 1 second for more responsive feedback
+    _ringtoneTimer = Timer.periodic(Duration(seconds: 1), (timer) {
+      if (_isRinging) {
+        _playRingtone();
+      } else {
+        timer.cancel();
+      }
     });
   }
   
@@ -34,13 +38,48 @@ class RingtoneService {
   /// Play single ringtone sound
   static void _playRingtone() {
     try {
-      // Use haptic feedback for ringing sensation
+      print('🔔 Playing ringtone - enhanced pattern');
+      
+      // Enhanced vibration pattern for incoming calls
       HapticFeedback.heavyImpact();
       
-      // Add vibration pattern
-      HapticFeedback.vibrate();
+      // Play system alert sound immediately
+      SystemSound.play(SystemSoundType.alert);
+      
+      // Additional vibration burst pattern
+      Timer(Duration(milliseconds: 150), () {
+        if (_isRinging) {
+          HapticFeedback.heavyImpact();
+        }
+      });
+      
+      Timer(Duration(milliseconds: 300), () {
+        if (_isRinging) {
+          HapticFeedback.vibrate();
+        }
+      });
+      
+      Timer(Duration(milliseconds: 450), () {
+        if (_isRinging) {
+          HapticFeedback.heavyImpact();
+        }
+      });
+      
+      // Final vibration
+      Timer(Duration(milliseconds: 600), () {
+        if (_isRinging) {
+          HapticFeedback.vibrate();
+        }
+      });
+      
     } catch (e) {
       print('❌ Error playing ringtone: $e');
+      // Fallback to basic vibration
+      try {
+        HapticFeedback.vibrate();
+      } catch (fallbackError) {
+        print('❌ Fallback vibration also failed: $fallbackError');
+      }
     }
   }
   

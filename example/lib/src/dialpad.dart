@@ -16,6 +16,7 @@ import 'recent_calls.dart';
 import 'websocket_connection_manager.dart';
 import 'unified_call_screen.dart';
 import 'vpn_manager.dart';
+import 'persistent_background_service.dart';
 
 class DialPadWidget extends ConsumerStatefulWidget {
   final SIPUAHelper? _helper;
@@ -717,6 +718,40 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
     }
   }
 
+  void _testEnhancedNotification() async {
+    print('🧪 Testing enhanced notification with auto-launch...');
+    
+    try {
+      // Test the enhanced notification system
+      await PersistentBackgroundService.showIncomingCallNotification(
+        caller: 'Test Caller Enhanced',
+        callId: 'test_enhanced_${DateTime.now().millisecondsSinceEpoch}',
+      );
+      
+      print('✅ Enhanced notification test triggered successfully!');
+      
+      // Show confirmation to user
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('🔥 Enhanced notification sent! Check status bar and wait for auto-launch.'),
+          duration: Duration(seconds: 5),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      
+    } catch (e) {
+      print('❌ Enhanced notification test failed: $e');
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('❌ Notification test failed: $e'),
+          duration: Duration(seconds: 3),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   void _showConnectionStatus() {
     final connectionManager = WebSocketConnectionManager();
     
@@ -1168,6 +1203,15 @@ class _MyDialPadWidget extends ConsumerState<DialPadWidget>
                         onTap: () {
                           Navigator.pop(context);
                           _testCallScreenNavigation();
+                        },
+                      ),
+                      ListTile(
+                        leading: Icon(Icons.notifications_active),
+                        title: Text('Test Enhanced Notification'),
+                        subtitle: Text('Test prominent notification + auto-launch'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _testEnhancedNotification();
                         },
                       ),
                       ListTile(

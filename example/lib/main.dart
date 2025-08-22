@@ -5,6 +5,7 @@ import 'package:dart_sip_ua_example/src/persistent_background_service.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show debugDefaultTargetPlatformOverride, kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -22,6 +23,7 @@ import 'src/vpn_config_screen.dart';
 import 'src/vpn_manager.dart';
 import 'src/ios_push_service.dart';
 import 'src/battery_optimization_helper.dart';
+import 'src/websocket_connection_manager.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
@@ -71,7 +73,7 @@ void main() async {
   await _requestBatteryOptimizationBypass();
   
   
-  Logger.level = Level.warning;
+  Logger.level = Level.debug;
   if (WebRTC.platformIsDesktop) {
     debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
   }
@@ -428,6 +430,25 @@ class MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
     // Set up platform channel listener for incoming calls
     _setupIncomingCallChannel();
     
+    // Set up callback for active app incoming calls (direct navigation without notification)
+    WebSocketConnectionManager.setIncomingCallCallback((Call call) {
+      print('🔥 ACTIVE APP CALLBACK: Incoming call detected - ${call.remote_identity}');
+      
+      if (mounted && navigatorKey.currentContext != null) {
+        print('🚀 ACTIVE APP CALLBACK: Navigating directly to call screen');
+        
+        Navigator.of(navigatorKey.currentContext!).pushNamedAndRemoveUntil(
+          '/callscreen',
+          (route) => false,
+          arguments: call,
+        );
+        
+        print('✅ ACTIVE APP CALLBACK: Successfully navigated to call screen');
+      } else {
+        print('❌ ACTIVE APP CALLBACK: Cannot navigate - app not ready');
+      }
+    });
+    
     // Check for incoming calls on app start
     _checkForIncomingCallsOnStart();
   }
@@ -439,48 +460,107 @@ class MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
       if (call.method == 'handleIncomingCall') {
         final caller = call.arguments['caller'] as String?;
         final callId = call.arguments['callId'] as String?;
+        final fromNotification = call.arguments['fromNotification'] as bool? ?? false;
+        final showIncomingCallScreen = call.arguments['showIncomingCallScreen'] as bool? ?? false;
+        final retryAttempt = call.arguments['retryAttempt'] as int? ?? 1;
+        final fromActiveApp = call.arguments['fromActiveApp'] as bool? ?? false;
         
-        print('📞 Platform channel incoming call: $caller, callId: $callId');
+        print('📞 Platform channel incoming call: $caller, callId: $callId, fromNotification: $fromNotification, showCallScreen: $showIncomingCallScreen, retry: $retryAttempt, fromActiveApp: $fromActiveApp');
+        
+        if (fromActiveApp) {
+          print('🔥 ACTIVE APP: Call from active app detected - callback should have handled this');
+          // The callback should have already handled this, but as a fallback we can still try platform approach
+        }
         
         // Check for background calls and navigate
-        await _handleIncomingCallFromPlatform(caller, callId);
+        await _handleIncomingCallFromPlatform(caller, callId, fromNotification: fromNotification, showCallScreen: showIncomingCallScreen, retryAttempt: retryAttempt, fromActiveApp: fromActiveApp);
       }
     });
   }
   
-  Future<void> _handleIncomingCallFromPlatform(String? caller, String? callId) async {
-    print('📱 Handling incoming call from platform: $caller');
+  Future<void> _handleIncomingCallFromPlatform(String? caller, String? callId, {bool fromNotification = false, bool showCallScreen = false, int retryAttempt = 1, bool fromActiveApp = false}) async {
+    print('📱🚀 PLATFORM CHANNEL: Handling incoming call from platform: $caller (callId: $callId) - FromNotification: $fromNotification, ShowCallScreen: $showCallScreen, Retry: $retryAttempt, FromActiveApp: $fromActiveApp');
     
     try {
-      // Small delay to ensure app is ready
-      await Future.delayed(Duration(milliseconds: 500));
+      // Immediately mark app as active to enable polling
+      _setMainAppActiveWithPrefs(true);
+      print('📱 PLATFORM: Main app marked as ACTIVE for call handling');
       
-      // Check for background calls
-      final activeCall = PersistentBackgroundService.getActiveCall();
-      final incomingCall = PersistentBackgroundService.getIncomingCall();
-      
-      print('📊 Platform call lookup: activeCall=${activeCall?.id}, incomingCall=${incomingCall?.id}');
-      
-      final callToShow = activeCall ?? incomingCall;
-      
-      if (callToShow != null) {
-        print('🚀 Platform: Navigating to call screen for ${callToShow.remote_identity}');
+      // If launched from notification, try immediate call screen display
+      if (fromNotification && showCallScreen) {
+        print('🔔 NOTIFICATION LAUNCH: Trying immediate call screen display...');
         
-        if (mounted && navigatorKey.currentContext != null) {
-          Navigator.of(navigatorKey.currentContext!).pushNamedAndRemoveUntil(
-            '/callscreen',
-            (route) => false,
-            arguments: callToShow,
-          );
+        // Check for forwarded call first (highest priority)
+        final forwardedCall = await PersistentBackgroundService.getForwardedCall();
+        if (forwardedCall != null) {
+          print('🚀 NOTIFICATION: Found forwarded call immediately - showing call screen: ${forwardedCall.remote_identity}');
           
-          // Hide notification
-          await PersistentBackgroundService.hideIncomingCallNotification();
+          // Clear the forwarded call and navigate
+          await PersistentBackgroundService.clearForwardedCall();
+          
+          if (mounted && navigatorKey.currentContext != null) {
+            Navigator.of(navigatorKey.currentContext!).pushNamedAndRemoveUntil(
+              '/callscreen',
+              (route) => false,
+              arguments: forwardedCall,
+            );
+            PersistentBackgroundService.hideIncomingCallNotification();
+            return; // Success - exit early
+          }
         }
-      } else {
-        print('⚠️ Platform: No matching call found for platform launch');
       }
+      
+      // Shorter delay to be more responsive for regular flow
+      await Future.delayed(Duration(milliseconds: 200));
+      
+      // Check multiple times with increasing delays for robustness
+      for (int attempt = 1; attempt <= 3; attempt++) {
+        print('📞 PLATFORM: Attempt $attempt - checking for stored calls...');
+        
+        final activeCall = PersistentBackgroundService.getActiveCall();
+        final incomingCall = PersistentBackgroundService.getIncomingCall();
+        
+        print('📊 Platform call lookup (attempt $attempt): activeCall=${activeCall?.id}, incomingCall=${incomingCall?.id}');
+        
+        final callToShow = activeCall ?? incomingCall;
+        
+        if (callToShow != null) {
+          print('🎉 PLATFORM: Found stored call on attempt $attempt - ${callToShow.remote_identity}');
+          print('📞 Call details: ID=${callToShow.id}, State=${callToShow.state}, Direction=${callToShow.direction}');
+          
+          if (mounted && navigatorKey.currentContext != null) {
+            print('🚀🚀 PLATFORM: Navigating to call screen immediately!');
+            Navigator.of(navigatorKey.currentContext!).pushNamedAndRemoveUntil(
+              '/callscreen',
+              (route) => false,
+              arguments: callToShow,
+            );
+            
+            // Hide notification
+            await PersistentBackgroundService.hideIncomingCallNotification();
+            print('✅ PLATFORM: Call screen navigation completed successfully');
+            return; // Exit early on success
+          } else {
+            print('❌ PLATFORM: Cannot navigate - app not ready (mounted: $mounted, context: ${navigatorKey.currentContext != null})');
+          }
+        } else {
+          print('⚠️ PLATFORM: No stored call found on attempt $attempt');
+          
+          // If not the last attempt, wait before trying again
+          if (attempt < 3) {
+            await Future.delayed(Duration(milliseconds: 300 * attempt));
+          }
+        }
+      }
+      
+      print('⚠️ PLATFORM: No matching call found after 3 attempts for platform launch');
+      print('💡 PLATFORM: This could mean:');
+      print('   1. Call was not stored properly in background service');
+      print('   2. Call was already cleared/answered');  
+      print('   3. Background service call storage failed');
+      
     } catch (e) {
-      print('❌ Error handling platform incoming call: $e');
+      print('❌ PLATFORM: Error handling platform incoming call: $e');
     }
   }
   
@@ -757,49 +837,77 @@ class MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
 
   void _handleAppResume() async {
     try {
+      print('🔄📱 APP RESUME: Starting app resume handling...');
+      
+      // Immediately mark app as active for polling
+      _setMainAppActiveWithPrefs(true);
+      print('📱 RESUME: Main app marked as ACTIVE');
+      
       // Small delay to allow UI to settle
-      await Future.delayed(Duration(milliseconds: 500));
+      await Future.delayed(Duration(milliseconds: 300));
       
       final sipUserCubit = ref.read(sipUserCubitProvider);
       final helper = ref.read(sipHelperProvider);
       
-      print('🔍 Checking connections on app resume...');
+      print('🔍 RESUME: Checking connections on app resume...');
       
-      // Check and reconnect VPN first if needed
+      // FIRST PRIORITY: Check for incoming calls from background service
+      print('📞🚨 RESUME: PRIORITY CHECK - Looking for background incoming calls...');
+      
+      for (int attempt = 1; attempt <= 3; attempt++) {
+        print('📞 RESUME: Attempt $attempt - checking for stored calls...');
+        
+        final hasIncoming = PersistentBackgroundService.hasIncomingCall();
+        final activeCall = PersistentBackgroundService.getActiveCall();
+        final incomingCall = PersistentBackgroundService.getIncomingCall();
+        
+        print('📊 RESUME: Background call status (attempt $attempt):');
+        print('  - hasIncoming: $hasIncoming');
+        print('  - activeCall ID: ${activeCall?.id}');
+        print('  - incomingCall ID: ${incomingCall?.id}');
+        
+        if (hasIncoming || activeCall != null || incomingCall != null) {
+          final callToShow = incomingCall ?? activeCall;
+          if (callToShow != null) {
+            print('🎉 RESUME: Found stored call on attempt $attempt!');
+            print('📞 RESUME: Call details: ${callToShow.remote_identity} (ID: ${callToShow.id}, State: ${callToShow.state})');
+            
+            // Navigate to call screen immediately
+            if (mounted && navigatorKey.currentContext != null) {
+              print('🚀🚀 RESUME: Navigating to call screen for background call NOW!');
+              Navigator.of(navigatorKey.currentContext!).pushNamedAndRemoveUntil(
+                '/callscreen', 
+                (route) => false, // Remove all previous routes
+                arguments: callToShow,
+              );
+              
+              // Hide notification since app is now handling the call
+              await PersistentBackgroundService.hideIncomingCallNotification();
+              print('✅ RESUME: Call screen navigation completed successfully!');
+              return; // Exit early - call is being handled
+            } else {
+              print('❌ RESUME: Cannot navigate - app not ready (mounted: $mounted, context: ${navigatorKey.currentContext != null})');
+            }
+          }
+        } else {
+          print('⚠️ RESUME: No stored calls found on attempt $attempt');
+          
+          // If not the last attempt, wait before trying again
+          if (attempt < 3) {
+            await Future.delayed(Duration(milliseconds: 200 * attempt));
+          }
+        }
+      }
+      
+      print('📊 RESUME: No incoming calls found, proceeding with normal resume logic...');
+      
+      // Check and reconnect VPN if needed
       await _checkAndReconnectVPN();
       
       print('📊 SIP Status:');
       print('📊 Has saved user: ${sipUserCubit.state != null}');
       print('📊 Is registered: ${sipUserCubit.isRegistered}');
       print('📊 Helper registered: ${helper.registered}');
-      
-      // Check for incoming calls from background service first
-      print('📞 Checking for background incoming calls on resume...');
-      final hasIncoming = PersistentBackgroundService.hasIncomingCall();
-      final activeCall = PersistentBackgroundService.getActiveCall();
-      
-      print('📊 Background call status: hasIncoming=$hasIncoming, activeCall=${activeCall?.id}');
-      
-      if (hasIncoming || activeCall != null) {
-        final callToShow = PersistentBackgroundService.getIncomingCall() ?? activeCall;
-        if (callToShow != null) {
-          print('🔔 Found call from background service: ${callToShow.remote_identity} (State: ${callToShow.state})');
-          
-          // Navigate to call screen immediately
-          if (mounted && navigatorKey.currentContext != null) {
-            print('🚀 Navigating to call screen for background call');
-            Navigator.of(navigatorKey.currentContext!).pushNamedAndRemoveUntil(
-              '/callscreen', 
-              (route) => false, // Remove all previous routes
-              arguments: callToShow,
-            );
-            
-            // Hide notification since app is now handling the call
-            await PersistentBackgroundService.hideIncomingCallNotification();
-          }
-          return; // Don't do other connection checks if handling incoming call
-        }
-      }
       
       // Take back SIP control from background service only if no active calls
       if (sipUserCubit.state != null) {
@@ -858,7 +966,11 @@ class MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
         // Mark as backgrounded for service awareness, but keep main SIP active
         PersistentBackgroundService.setMainAppActive(false);
         
+        // Add background incoming call listener for auto-launch
+        helper.addSipUaHelperListener(_BackgroundCallListener());
+        
         print('✅ Main app SIP will handle calls even in background mode');
+        print('🚀 Auto-launch listener added for background incoming calls');
         print('💡 This approach is more reliable than background service transfers');
       } else {
         print('⚠️ No active SIP registration to maintain');
@@ -920,4 +1032,39 @@ class MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
       onGenerateRoute: _onGenerateRoute,
     );
   }
+}
+
+/// Background call listener for auto-launch functionality
+class _BackgroundCallListener implements SipUaHelperListener {
+  @override
+  void callStateChanged(Call call, CallState state) {
+    if (state.state == CallStateEnum.CALL_INITIATION && call.direction == Direction.incoming) {
+      final caller = call.remote_identity ?? 'Unknown';
+      print('🚀 BACKGROUND: Incoming call from $caller - triggering auto-launch');
+      
+      // First store the incoming call in background service
+      PersistentBackgroundService.setIncomingCall(call);
+      
+      // Then trigger auto-launch notification and app opening
+      PersistentBackgroundService.showIncomingCallNotification(
+        caller: caller,
+        callId: call.id ?? 'unknown',
+      );
+    }
+  }
+
+  @override
+  void transportStateChanged(TransportState state) {}
+
+  @override
+  void registrationStateChanged(RegistrationState state) {}
+
+  @override
+  void onNewMessage(SIPMessageRequest msg) {}
+
+  @override
+  void onNewNotify(Notify ntf) {}
+
+  @override
+  void onNewReinvite(ReInvite event) {}
 }

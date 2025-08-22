@@ -117,8 +117,8 @@ class PersistentBackgroundService {
     print('📱 Notification tapped: ${response.payload}');
     
     // Handle notification actions
-    if (response.actionId == 'accept_call') {
-      print('✅ Accept call action tapped');
+    if (response.actionId == 'answer_call') {
+      print('✅ Answer call action tapped');
       _handleAcceptCallFromNotification(response.payload);
     } else if (response.actionId == 'decline_call') {
       print('❌ Decline call action tapped');
@@ -252,16 +252,33 @@ class PersistentBackgroundService {
         
         print('📞 Launching app for call from $caller (ID: $callId)');
         
-        // Use platform channel to launch main activity with intent data
+        // CRITICAL: Use the aggressive forceOpenAppForCall instead
         const platform = MethodChannel('sip_phone/incoming_call');
-        platform.invokeMethod('launchIncomingCallScreen', {
+        platform.invokeMethod('forceOpenAppForCall', {
           'caller': caller,
           'callId': callId,
+          'autoLaunch': true,
           'fromNotification': true,
+          'forceToForeground': true,
+          'showIncomingCallScreen': true,
         }).then((_) {
-          print('✅ App launch request sent via platform channel');
+          print('✅ FORCE app launch request sent via platform channel');
+          
+          // Also ensure the call is properly stored for main app access
+          if (_currentIncomingCall != null) {
+            _forwardedCall = _currentIncomingCall;
+            print('🔄 Stored current incoming call as forwarded call for main app');
+          }
+          
         }).catchError((error) {
-          print('❌ Failed to launch app via platform channel: $error');
+          print('❌ Failed to FORCE launch app via platform channel: $error');
+          
+          // Fallback to old method
+          platform.invokeMethod('launchIncomingCallScreen', {
+            'caller': caller,
+            'callId': callId,
+            'fromNotification': true,
+          });
         });
       } else {
         print('⚠️ Invalid payload format: $payload');
@@ -624,22 +641,100 @@ class PersistentBackgroundService {
     required String caller,
     required String callId,
   }) async {
+    print('🔔 Checking if notification should be shown for: $caller');
+    
+    // CRITICAL: Check if main app is active - if so, NO NOTIFICATION needed!
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final mainAppActive = prefs.getBool('main_app_is_active') ?? false;
+      
+      if (mainAppActive) {
+        print('🚫 MAIN APP ACTIVE: Skipping notification - main app will handle call directly');
+        print('📱 Main app should already be showing incoming call screen');
+        return; // Exit early - no notification needed
+      }
+      
+      print('📱 MAIN APP INACTIVE: Proceeding with notification and auto-launch');
+    } catch (e) {
+      print('⚠️ Could not check main app status: $e - proceeding with notification');
+    }
+    
     print('🔔 Showing incoming call notification for: $caller');
     
-    // IMMEDIATELY launch the app for incoming call
-    print('🚀 FORCE LAUNCHING APP for incoming call from: $caller');
+    // 🔥🔥 ZERO-TOUCH AUTO-LAUNCH - APP COMES TO FOREGROUND AUTOMATICALLY 🔥🔥
+    print('🚀🚀🚀 AUTOMATIC FOREGROUND LAUNCH for incoming call from: $caller (NO USER INTERACTION REQUIRED)');
+    
+    // IMMEDIATE LAUNCH: Attempt 1 - Direct auto-launch without notification dependency
     try {
-      // Use Android Intent to force launch the app
       const platform = MethodChannel('sip_phone/incoming_call');
       await platform.invokeMethod('forceOpenAppForCall', {
         'caller': caller,
         'callId': callId,
         'autoLaunch': true,
+        'automaticForeground': true,
+        'noUserInteraction': true,
       });
-      print('📱 App force-launched successfully');
+      print('🎉 ZERO-TOUCH: App auto-launched to foreground successfully (attempt 1)');
     } catch (e) {
-      print('⚠️ Could not force launch app: $e');
+      print('⚠️ Auto-launch attempt 1 failed: $e');
     }
+    
+    // AGGRESSIVE RETRY: Attempt 2 - More aggressive after short delay
+    Timer(Duration(milliseconds: 200), () async {
+      try {
+        const platform = MethodChannel('sip_phone/incoming_call');
+        await platform.invokeMethod('forceOpenAppForCall', {
+          'caller': caller,
+          'callId': callId,
+          'autoLaunch': true,
+          'automaticForeground': true,
+          'noUserInteraction': true,
+          'aggressive': true,
+          'retry': 2,
+        });
+        print('🎉 ZERO-TOUCH: App auto-launched to foreground successfully (attempt 2 - aggressive)');
+      } catch (e) {
+        print('⚠️ Auto-launch attempt 2 failed: $e');
+      }
+    });
+    
+    // SUPER AGGRESSIVE: Attempt 3 - Maximum force after longer delay
+    Timer(Duration(milliseconds: 500), () async {
+      try {
+        const platform = MethodChannel('sip_phone/incoming_call');
+        await platform.invokeMethod('forceOpenAppForCall', {
+          'caller': caller,
+          'callId': callId,
+          'autoLaunch': true,
+          'automaticForeground': true,
+          'noUserInteraction': true,
+          'superAggressive': true,
+          'retry': 3,
+        });
+        print('🎉 ZERO-TOUCH: App auto-launched to foreground successfully (attempt 3 - SUPER AGGRESSIVE)');
+      } catch (e) {
+        print('⚠️ Auto-launch attempt 3 failed: $e');
+      }
+    });
+    
+    // NUCLEAR OPTION: Attempt 4 - Last resort with maximum delay
+    Timer(Duration(seconds: 1), () async {
+      try {
+        const platform = MethodChannel('sip_phone/incoming_call');
+        await platform.invokeMethod('forceOpenAppForCall', {
+          'caller': caller,
+          'callId': callId,
+          'autoLaunch': true,
+          'automaticForeground': true,
+          'noUserInteraction': true,
+          'nuclearOption': true,
+          'retry': 4,
+        });
+        print('🎉 ZERO-TOUCH: App auto-launched to foreground successfully (attempt 4 - NUCLEAR)');
+      } catch (e) {
+        print('⚠️ Auto-launch attempt 4 failed: $e');
+      }
+    });
     
     // Start continuous ringing with vibration - async operation
     _startContinuousRinging();
@@ -649,7 +744,7 @@ class PersistentBackgroundService {
       'Incoming Calls',
       channelDescription: 'Notifications for incoming SIP calls',
       importance: Importance.max,
-      priority: Priority.high,
+      priority: Priority.max, // Changed to max for highest priority
       category: AndroidNotificationCategory.call,
       fullScreenIntent: true, // Show as full screen on lock screen
       ongoing: true, // Cannot be dismissed
@@ -662,17 +757,33 @@ class PersistentBackgroundService {
       vibrationPattern: Int64List.fromList([0, 1000, 500, 1000]),
       ticker: 'Incoming call from $caller',
       largeIcon: DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
-      actions: <AndroidNotificationAction>[
+      visibility: NotificationVisibility.public,
+      showProgress: false,
+      indeterminate: false,
+      // Enhanced for screen visibility
+      enableLights: true,
+      ledColor: const Color.fromARGB(255, 255, 0, 0),
+      ledOnMs: 1000,
+      ledOffMs: 500,
+      timeoutAfter: null, // Never timeout
+      groupKey: 'incoming_calls',
+      setAsGroupSummary: true,
+      onlyAlertOnce: false, // Always alert
+      // Add action buttons for Answer/Decline
+      actions: [
         AndroidNotificationAction(
-          'accept_call',
-          'Accept',
-          showsUserInterface: true,
-          cancelNotification: false,
+          'answer_call',
+          '📞 ANSWER',
+          titleColor: Color.fromARGB(255, 0, 255, 0),
+          icon: DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
+          contextual: true,
         ),
         AndroidNotificationAction(
-          'decline_call',
-          'Decline',
-          cancelNotification: true,
+          'decline_call', 
+          '❌ DECLINE',
+          titleColor: Color.fromARGB(255, 255, 0, 0),
+          icon: DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
+          contextual: true,
         ),
       ],
     );
@@ -693,8 +804,8 @@ class PersistentBackgroundService {
 
     await _notificationsPlugin.show(
       999, // Fixed ID for incoming calls
-      '📞 Incoming Call',
-      'Call from $caller - Tap to answer',
+      '📞 INCOMING CALL - TAP TO ANSWER',
+      '🔥 URGENT: Call from $caller - Tap anywhere to open app and answer',
       notificationDetails,
       payload: 'incoming_call:$callId:$caller',
     );
@@ -839,6 +950,12 @@ class PersistentBackgroundService {
   @pragma('vm:entry-point')
   static Call? getActiveCall() {
     return _currentActiveCall ?? _currentIncomingCall;
+  }
+
+  @pragma('vm:entry-point')
+  static void setIncomingCall(Call call) {
+    print('📞 Setting incoming call: ${call.remote_identity} (ID: ${call.id})');
+    _currentIncomingCall = call;
   }
 
   @pragma('vm:entry-point')
@@ -1438,7 +1555,7 @@ class PersistentBackgroundService {
         print('✅ DETAILED: Registration call completed');
       } catch (regError) {
         print('❌ DETAILED: Registration call failed: $regError');
-        throw regError;
+        rethrow;
       }
       
       print('✅✅ DETAILED CONNECTION: SIP helper started and registration attempted ✅✅');
@@ -1456,7 +1573,7 @@ class PersistentBackgroundService {
           // Update notification
           _updateServiceNotification(
             'SIP Phone (iOS Connected)', 
-            'Connected to ${domain} - ready for calls'
+            'Connected to $domain - ready for calls'
           );
           return;
         }

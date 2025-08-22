@@ -39,21 +39,86 @@ class MainActivity: FlutterActivity() {
                         val caller = call.argument<String>("caller") ?: "Unknown"
                         val callId = call.argument<String>("callId") ?: ""
                         val autoLaunch = call.argument<Boolean>("autoLaunch") ?: false
+                        val retry = call.argument<Int>("retry") ?: 1
+                        val aggressive = call.argument<Boolean>("aggressive") ?: false
+                        val superAggressive = call.argument<Boolean>("superAggressive") ?: false
+                        val nuclearOption = call.argument<Boolean>("nuclearOption") ?: false
+                        val fromNotification = call.argument<Boolean>("fromNotification") ?: false
+                        val showIncomingCallScreen = call.argument<Boolean>("showIncomingCallScreen") ?: false
                         
-                        Log.d(TAG, "FORCE OPEN APP for incoming call - Caller: $caller, CallId: $callId, AutoLaunch: $autoLaunch")
+                        Log.d(TAG, "🚀🚀 FORCE OPEN APP (attempt $retry) for incoming call - Caller: $caller, CallId: $callId, FromNotification: $fromNotification, ShowCallScreen: $showIncomingCallScreen")
                         
-                        // Force bring app to foreground immediately
-                        bringAppToForeground()
-                        
-                        // Launch app with incoming call intent
+                        // Create intent with maximum aggressive flags based on retry attempt
                         val intent = Intent(this, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                            if (nuclearOption) {
+                                // NUCLEAR: Maximum possible flags
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
+                                       Intent.FLAG_ACTIVITY_CLEAR_TOP or 
+                                       Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                       Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                                       Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT or
+                                       Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED or
+                                       Intent.FLAG_ACTIVITY_CLEAR_WHEN_TASK_RESET
+                            } else if (superAggressive) {
+                                // SUPER AGGRESSIVE: More flags
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
+                                       Intent.FLAG_ACTIVITY_CLEAR_TOP or 
+                                       Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                       Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                                       Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT
+                            } else if (aggressive) {
+                                // AGGRESSIVE: Additional flags
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
+                                       Intent.FLAG_ACTIVITY_CLEAR_TOP or 
+                                       Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                       Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                            } else {
+                                // STANDARD: Original flags
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
+                                       Intent.FLAG_ACTIVITY_CLEAR_TOP or 
+                                       Intent.FLAG_ACTIVITY_SINGLE_TOP
+                            }
+                            
                             putExtra("incoming_call", true)
                             putExtra("caller", caller)
                             putExtra("callId", callId)
                             putExtra("autoLaunch", true)
+                            putExtra("forceToForeground", true)
+                            putExtra("retryAttempt", retry)
+                            putExtra("fromNotification", fromNotification)
+                            putExtra("showIncomingCallScreen", showIncomingCallScreen)
                         }
+                        
+                        Log.d(TAG, "🚀 Launching activity (attempt $retry) to bring app to foreground...")
                         startActivity(intent)
+                        
+                        // Apply window flags to current activity with increasing aggression
+                        try {
+                            bringAppToForeground()
+                            Log.d(TAG, "✅ Window flags applied to current activity (attempt $retry)")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not apply window flags to current activity (attempt $retry): ${e.message}")
+                        }
+                        
+                        // For aggressive attempts, also try to force task to front
+                        if (aggressive || superAggressive || nuclearOption) {
+                            try {
+                                // Force move to front multiple times
+                                moveTaskToBack(false)
+                                moveTaskToBack(false)
+                                
+                                if (superAggressive || nuclearOption) {
+                                    // Additional aggressive measures
+                                    window.decorView.requestFocus()
+                                    setShowWhenLocked(true)
+                                    setTurnScreenOn(true)
+                                }
+                                
+                                Log.d(TAG, "✅ Extra aggressive foreground measures applied (attempt $retry)")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Could not apply extra aggressive measures (attempt $retry): ${e.message}")
+                            }
+                        }
                         
                         // Send incoming call data to Flutter immediately
                         flutterEngine?.dartExecutor?.binaryMessenger?.let { messenger ->
@@ -62,11 +127,19 @@ class MainActivity: FlutterActivity() {
                                     "caller" to caller,
                                     "callId" to callId,
                                     "autoLaunch" to true,
-                                    "fromBackground" to true
+                                    "fromBackground" to true,
+                                    "forceToForeground" to true,
+                                    "retryAttempt" to retry,
+                                    "fromNotification" to fromNotification,
+                                    "showIncomingCallScreen" to showIncomingCallScreen,
+                                    "aggressive" to aggressive,
+                                    "superAggressive" to superAggressive,
+                                    "nuclearOption" to nuclearOption
                                 ))
                         }
                         
-                        result.success("App force-launched for incoming call")
+                        Log.d(TAG, "✅ Force app launch completed successfully (attempt $retry)")
+                        result.success("App force-launched for incoming call with foreground priority (attempt $retry)")
                     }
                     "launchIncomingCallScreen" -> {
                         val caller = call.argument<String>("caller") ?: "Unknown"
@@ -107,17 +180,38 @@ class MainActivity: FlutterActivity() {
     
     private fun bringAppToForeground() {
         try {
-            // Add flags to show over lock screen and bring to front
+            Log.d(TAG, "🔥 AGGRESSIVELY bringing app to foreground...")
+            
+            // Step 1: Add window flags to show over lock screen and wake up device
             window.addFlags(
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                 WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
                 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-                WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+                WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON
             )
             
-            Log.d(TAG, "App brought to foreground for incoming call")
+            // Step 2: Move task to front
+            try {
+                moveTaskToBack(false)  // First move to back
+                moveTaskToBack(false)  // Then bring to front (this forces refresh)
+                Log.d(TAG, "✅ Task moved to front")
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not move task: ${e.message}")
+            }
+            
+            // Step 3: Request focus and bring to front
+            try {
+                window.decorView.requestFocus()
+                requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                Log.d(TAG, "✅ Window focus requested")
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not request focus: ${e.message}")
+            }
+            
+            Log.d(TAG, "🎉 App aggressively brought to foreground for incoming call")
         } catch (e: Exception) {
-            Log.e(TAG, "Error bringing app to foreground: ${e.message}")
+            Log.e(TAG, "❌ Error bringing app to foreground: ${e.message}")
         }
     }
     

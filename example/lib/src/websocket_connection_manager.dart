@@ -3,9 +3,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sip_ua/sip_ua.dart';
 import 'package:logger/logger.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/material.dart';
 import 'user_state/sip_user.dart';
 import 'persistent_background_service.dart';
 import 'vpn_manager.dart';
+import 'ringtone_service.dart';
 
 /// Simple WebSocket-only SIP connection manager
 class WebSocketConnectionManager implements SipUaHelperListener {
@@ -178,6 +181,17 @@ class WebSocketConnectionManager implements SipUaHelperListener {
     settings.dtmfMode = DtmfMode.RFC2833;
     settings.register = true;
     settings.register_expires = 600; // Increase to 10 minutes for stability
+    
+    // CRITICAL: Set fixed contact URI to prevent random SIP IDs
+    // This prevents the library from generating random tokens
+    settings.contact_uri = 'sip:$username@$domain;transport=ws';
+    
+    // Debug logging
+    _logger.i('🔧 SIP Settings configured:');
+    _logger.i('   URI: ${settings.uri}');
+    _logger.i('   AuthUser: ${settings.authorizationUser}');
+    _logger.i('   Contact URI: ${settings.contact_uri}');
+    _logger.i('   Display: ${settings.displayName}');
     
     // Enable session timers for connection stability
     settings.sessionTimers = true;
@@ -378,6 +392,26 @@ class WebSocketConnectionManager implements SipUaHelperListener {
   @override
   void callStateChanged(Call call, CallState state) {
     _logger.i('WebSocket Call state: ${state.state}');
+    
+    // CRITICAL: Handle incoming calls here!
+    print('🔍 Checking call: State=${state.state}, Direction=${call.direction}');
+    if (state.state == CallStateEnum.CALL_INITIATION && call.direction == Direction.incoming) {
+      print('🚨🚨🚨 INCOMING CALL DETECTED in WebSocketConnectionManager! 🚨🚨🚨');
+      print('📞 Call ID: ${call.id}');
+      print('📞 Remote identity: ${call.remote_identity}');
+      print('📞 Direction: ${call.direction}');
+      
+      // Start ringing immediately
+      print('🔔 Starting ringtone...');
+      RingtoneService.startRinging();
+      
+      // Trigger the incoming call UI
+      print('📞 Triggering incoming call screen...');
+      _triggerIncomingCallScreen(call);
+    } else {
+      print('❌ Call does not match incoming criteria: State=${state.state}, Direction=${call.direction}');
+    }
+    
     onCallStateChanged?.call(call, state);
   }
 
@@ -389,6 +423,46 @@ class WebSocketConnectionManager implements SipUaHelperListener {
 
   @override
   void onNewReinvite(ReInvite event) {}
+
+
+  // Callback for incoming call navigation
+  static Function(Call)? _onIncomingCallCallback;
+  
+  static void setIncomingCallCallback(Function(Call) callback) {
+    _onIncomingCallCallback = callback;
+  }
+
+  void _triggerIncomingCallScreen(Call call) async {
+    print('📞🔥 ACTIVE APP: _triggerIncomingCallScreen called for call: ${call.id}');
+    print('📱 ACTIVE APP: Navigating directly to call screen - NO NOTIFICATION NEEDED');
+    
+    try {
+      // CRITICAL: Since main app is active, use callback for direct navigation
+      if (_onIncomingCallCallback != null) {
+        print('🚀 ACTIVE APP: Using callback for direct navigation to call screen: ${call.remote_identity}');
+        _onIncomingCallCallback!(call);
+        print('✅ ACTIVE APP: Callback executed successfully');
+      } else {
+        print('❌ ACTIVE APP: No navigation callback available');
+        
+        // Fallback: Use platform channel but mark as active app
+        const MethodChannel incomingCallChannel = MethodChannel('sip_phone/incoming_call');
+        
+        await incomingCallChannel.invokeMethod('handleIncomingCall', {
+          'caller': call.remote_identity ?? 'Unknown',
+          'callId': call.id,
+          'fromNotification': false,
+          'fromBackground': false,
+          'fromActiveApp': true,
+          'showIncomingCallScreen': true,
+        });
+        
+        print('📞 ACTIVE APP: Fallback platform channel call made');
+      }
+    } catch (e) {
+      print('❌ ACTIVE APP: Error triggering incoming call screen: $e');
+    }
+  }
 
   void dispose() {
     _reconnectionTimer?.cancel();
