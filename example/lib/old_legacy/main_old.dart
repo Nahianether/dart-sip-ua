@@ -636,7 +636,7 @@ class MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
       bgService.on('callForwardedToMainApp').listen((event) {
         print('📞📞📞 RECEIVED CALL FORWARDED FROM BACKGROUND SERVICE: $event 📞📞📞');
         
-        if (event != null && event is Map<String, dynamic>) {
+        if (event != null) {
           final caller = event['caller'] as String? ?? 'Unknown';
           final callId = event['callId'] as String? ?? 'unknown';
           final direction = event['direction'] as String? ?? 'Direction.incoming';
@@ -771,30 +771,28 @@ class MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
     try {
       // Check if main app SIP helper has any calls
       final helper = ref.read(sipHelperProvider);
-      if (helper != null) {
-        print('📞 Main app helper found, checking for calls...');
-        // The SIP helper should receive the same incoming call event
-        // Let's just wait a moment for it to arrive
-        Timer(Duration(milliseconds: 500), () async {
-          final forwardedCall = await PersistentBackgroundService.getForwardedCall();
-          if (forwardedCall != null && mounted && navigatorKey.currentContext != null) {
-            print('🚀 Delayed call check found forwarded call: ${forwardedCall.remote_identity}');
-            
-            // Clear the forwarded call so it's not used again
-            await PersistentBackgroundService.clearForwardedCall();
-            
-            Navigator.of(navigatorKey.currentContext!).pushNamedAndRemoveUntil(
-              '/callscreen',
-              (route) => false,
-              arguments: forwardedCall,
-            );
-            PersistentBackgroundService.hideIncomingCallNotification();
-          } else {
-            print('❌ Delayed check still no forwarded call found');
-          }
-        });
-      }
-    } catch (e) {
+      print('📞 Main app helper found, checking for calls...');
+      // The SIP helper should receive the same incoming call event
+      // Let's just wait a moment for it to arrive
+      Timer(Duration(milliseconds: 500), () async {
+        final forwardedCall = await PersistentBackgroundService.getForwardedCall();
+        if (forwardedCall != null && mounted && navigatorKey.currentContext != null) {
+          print('🚀 Delayed call check found forwarded call: ${forwardedCall.remote_identity}');
+          
+          // Clear the forwarded call so it's not used again
+          await PersistentBackgroundService.clearForwardedCall();
+          
+          Navigator.of(navigatorKey.currentContext!).pushNamedAndRemoveUntil(
+            '/callscreen',
+            (route) => false,
+            arguments: forwardedCall,
+          );
+          PersistentBackgroundService.hideIncomingCallNotification();
+        } else {
+          print('❌ Delayed check still no forwarded call found');
+        }
+      });
+        } catch (e) {
       print('❌ Error in triggerIncomingCallCheck: $e');
     }
   }

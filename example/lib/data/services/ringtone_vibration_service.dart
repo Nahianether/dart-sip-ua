@@ -12,6 +12,7 @@ class RingtoneVibrationService {
 
   AudioPlayer? _audioPlayer;
   Timer? _vibrationTimer;
+  Timer? _soundTimer;
   bool _isRinging = false;
   final SettingsService _settingsService = SettingsService();
 
@@ -77,8 +78,6 @@ class RingtoneVibrationService {
 
   /// Stop ringing
   Future<void> stopRinging() async {
-    if (!_isRinging) return;
-
     try {
       print('📞 Stopping ringtone and vibration...');
       _isRinging = false;
@@ -86,12 +85,32 @@ class RingtoneVibrationService {
       // Stop audio
       await _audioPlayer?.stop();
       
-      // Stop vibration
+      // Stop sound timer
+      _soundTimer?.cancel();
+      _soundTimer = null;
+      
+      // Stop vibration timer and cancel any ongoing vibrations
       _vibrationTimer?.cancel();
+      _vibrationTimer = null;
       await Vibration.cancel();
+      
+      // Additional cleanup to ensure vibration stops
+      try {
+        await Vibration.vibrate(duration: 1); // Very short vibration to "reset"
+        await Future.delayed(Duration(milliseconds: 10));
+        await Vibration.cancel();
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+      
+      print('✅ Ringtone and vibration stopped successfully');
       
     } catch (e) {
       print('❌ Error stopping ringtone: $e');
+      // Force stop vibration even if there's an error
+      try {
+        await Vibration.cancel();
+      } catch (_) {}
     }
   }
 
@@ -116,38 +135,36 @@ class RingtoneVibrationService {
   /// Play system ringtone
   Future<void> _playSystemRingtone() async {
     try {
-      // Try to play default system ringtone
-      const platform = MethodChannel('com.example.ringtone');
-      await platform.invokeMethod('playDefaultRingtone');
+      // For now, use system sounds since method channel is not implemented
+      print('ℹ️ Using system sound for ringtone');
+      await _playSystemSound();
       
     } catch (e) {
       print('❌ System ringtone unavailable, using fallback: $e');
-      await _playFallbackRingtone();
+      await _playSystemSound();
     }
   }
 
-  /// Play fallback ringtone (built-in audio file)
+  /// Play fallback ringtone (built-in audio file) - disabled for now
   Future<void> _playFallbackRingtone() async {
-    try {
-      // You can add a ringtone.mp3 file to assets/audio/
-      await _audioPlayer?.play(AssetSource('audio/ringtone.mp3'));
-      
-      // If no custom ringtone, use system sound
-    } catch (e) {
-      print('❌ Fallback ringtone unavailable, using system sound: $e');
-      await _playSystemSound();
-    }
+    // Fallback to system sound since asset is not available
+    print('ℹ️ Using system sound as fallback');
+    await _playSystemSound();
   }
 
   /// Play system notification sound as last resort
   Future<void> _playSystemSound() async {
     try {
+      print('🔔 Playing system alert sound for incoming call');
+      
+      // Play initial sound
       SystemSound.play(SystemSoundType.alert);
       
-      // Repeat every 3 seconds while ringing
-      Timer.periodic(Duration(seconds: 3), (timer) {
+      // Repeat every 2 seconds while ringing (faster for better notification)
+      _soundTimer = Timer.periodic(Duration(seconds: 2), (timer) {
         if (!_isRinging) {
           timer.cancel();
+          print('🔕 Stopped system alert sound');
           return;
         }
         SystemSound.play(SystemSoundType.alert);
@@ -250,6 +267,8 @@ class RingtoneVibrationService {
   /// Dispose service
   void dispose() {
     stopRinging();
+    _soundTimer?.cancel();
+    _vibrationTimer?.cancel();
     _audioPlayer?.dispose();
     _audioPlayer = null;
   }

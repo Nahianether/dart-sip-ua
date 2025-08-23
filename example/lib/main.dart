@@ -161,15 +161,29 @@ class AppNavigator extends ConsumerWidget {
       data: (savedCredentials) {
         return accountState.when(
           data: (account) {
+            print('🔍 Account state check: account=${account?.username ?? 'null'}, savedCreds=${savedCredentials?.username ?? 'null'}');
+            print('🔍 Account state AsyncValue type: ${accountState.runtimeType}');
+            
             if (account != null) {
               // User is logged in, show dialer with call handling
+              print('✅ User logged in, showing main app for: ${account.username}@${account.domain}');
               return _buildMainApp(context, ref);
             } else if (savedCredentials != null) {
-              // Try auto-login with saved credentials
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                _attemptAutoLogin(ref, savedCredentials);
-              });
-              return _buildLoadingScreen('Connecting...', true);
+              // Saved credentials found with password - attempt auto-login
+              if (savedCredentials.password.isNotEmpty) {
+                print('🔄 Auto-login triggered - account state is null but credentials exist');
+                // Trigger auto-login immediately without postFrameCallback
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _attemptAutoLogin(ref, savedCredentials);
+                });
+                return _buildLoadingScreen('Auto-connecting...', true);
+              } else {
+                // Password missing - show login screen with pre-filled data
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _loadSavedCredentialsToForm(ref, savedCredentials);
+                });
+                return ModernLoginScreen();
+              }
             } else {
               // No saved credentials, show login screen
               return ModernLoginScreen();
@@ -368,10 +382,27 @@ class AppNavigator extends ConsumerWidget {
     );
   }
 
-  void _attemptAutoLogin(WidgetRef ref, SipAccountEntity credentials) {
-    // Auto-login is attempted by loading saved credentials,
-    // but password is not saved for security, so go to login screen
-    // with pre-filled fields except password
+  Future<void> _attemptAutoLogin(WidgetRef ref, SipAccountEntity credentials) async {
+    print('🔄 Attempting auto-login with saved credentials: ${credentials.username}@${credentials.domain}');
+    
+    try {
+      // Directly attempt login with the saved account
+      await ref.read(accountProvider.notifier).login(credentials);
+      print('✅ Auto-login completed successfully');
+      
+      // The account state should now be updated automatically
+      print('🔄 Account login completed - UI should rebuild automatically');
+    } catch (e) {
+      print('❌ Auto-login failed: $e');
+      // On failure, invalidate providers to show login screen
+      ref.invalidate(accountProvider);
+      ref.invalidate(autoLoginProvider);
+    }
+  }
+
+  void _loadSavedCredentialsToForm(WidgetRef ref, SipAccountEntity credentials) {
+    // Load saved credentials to login form (password missing)
+    print('ℹ️ Auto-filling login form with saved credentials (password required)');
     ref.read(loginActionProvider).loadSavedCredentials(credentials);
   }
 

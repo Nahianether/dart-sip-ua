@@ -285,6 +285,7 @@ class HiveService {
     final data = {
       'id': credentials.id,
       'username': credentials.username,
+      'password': credentials.password, // Now saving password for auto-login
       'domain': credentials.domain,
       'wsUrl': credentials.wsUrl,
       'displayName': credentials.displayName,
@@ -456,6 +457,7 @@ class HiveService {
     return StoredCredentialsModel()
       ..id = data['id']
       ..username = data['username'] ?? ''
+      ..password = data['password'] ?? '' // Now reading password from storage
       ..domain = data['domain'] ?? ''
       ..wsUrl = data['wsUrl'] ?? ''
       ..displayName = data['displayName']

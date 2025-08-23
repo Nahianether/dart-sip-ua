@@ -22,8 +22,8 @@ class ConnectionStabilityService {
   
   // Connection parameters
   int _reconnectAttempts = 0;
-  int _maxReconnectAttempts = 10;
-  int _baseReconnectDelay = 2; // seconds
+  final int _maxReconnectAttempts = 10;
+  final int _baseReconnectDelay = 2; // seconds
   bool _isReconnecting = false;
   
   // Health monitoring

@@ -2,18 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../src/providers.dart';
 
-// Theme provider
-final themeProvider = StateNotifierProvider<ThemeNotifier, ThemeMode>((ref) {
-  return ThemeNotifier();
-});
-
-class ThemeNotifier extends StateNotifier<ThemeMode> {
-  ThemeNotifier() : super(ThemeMode.system);
-
-  void setLightMode() => state = ThemeMode.light;
-  void setDarkMode() => state = ThemeMode.dark;
-  void setSystemMode() => state = ThemeMode.system;
-}
+// Removed duplicate theme provider - using settingsNotifierProvider instead
 
 class SettingsScreen extends ConsumerStatefulWidget {
   @override
@@ -23,8 +12,11 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final currentTheme = ref.watch(themeProvider);
+    final settingsAsync = ref.watch(settingsNotifierProvider);
+    final currentTheme = settingsAsync.maybeWhen(
+      data: (settings) => settings.themeMode ?? ThemeMode.system,
+      orElse: () => ThemeMode.system,
+    );
     final account = ref.watch(accountProvider);
 
     return Scaffold(
@@ -399,7 +391,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   void _showThemeDialog() {
-    final currentTheme = ref.read(themeProvider);
+    final settingsAsync = ref.read(settingsNotifierProvider);
+    final currentTheme = settingsAsync.maybeWhen(
+      data: (settings) => settings.themeMode ?? ThemeMode.system,
+      orElse: () => ThemeMode.system,
+    );
     
     showDialog(
       context: context,
@@ -456,18 +452,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
       title: Text(title),
       trailing: isSelected ? Icon(Icons.check, color: Theme.of(context).primaryColor) : null,
-      onTap: () {
-        switch (mode) {
-          case ThemeMode.light:
-            ref.read(themeProvider.notifier).setLightMode();
-            break;
-          case ThemeMode.dark:
-            ref.read(themeProvider.notifier).setDarkMode();
-            break;
-          case ThemeMode.system:
-            ref.read(themeProvider.notifier).setSystemMode();
-            break;
-        }
+      onTap: () async {
+        // Update theme using the settings notifier that saves to Hive
+        await ref.read(settingsNotifierProvider.notifier).updateTheme(mode);
         Navigator.pop(context);
       },
     );

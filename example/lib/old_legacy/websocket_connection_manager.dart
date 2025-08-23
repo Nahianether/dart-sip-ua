@@ -4,7 +4,6 @@ import 'package:sip_ua/sip_ua.dart';
 import 'package:logger/logger.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/material.dart';
 import 'user_state/sip_user.dart';
 import 'persistent_background_service.dart';
 import 'vpn_manager.dart';

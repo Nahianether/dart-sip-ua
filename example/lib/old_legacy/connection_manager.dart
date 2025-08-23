@@ -784,7 +784,7 @@ shWr8WQLs62E90vQhhZbhAB+PW6GhwkBWQ==
     settings.realm = null;
     settings.authorizationUser = username;
     settings.password = user.password;
-    settings.displayName = user.displayName?.isNotEmpty == true ? user.displayName : username;
+    settings.displayName = user.displayName.isNotEmpty == true ? user.displayName : username;
     settings.userAgent = 'Flutter SIP Client v2.0';
     settings.dtmfMode = DtmfMode.RFC2833;
     settings.register = true;

@@ -13,6 +13,7 @@ import '../data/repositories/storage_repository_impl.dart';
 import '../data/services/settings_service.dart';
 import '../data/models/app_settings_model.dart';
 import '../data/services/call_log_service.dart';
+import '../data/services/auth_service.dart';
 import '../data/services/connection_stability_service.dart';
 
 // Global providers for the legacy system
@@ -287,10 +288,29 @@ class AccountNotifier extends StateNotifier<AsyncValue<SipAccountEntity?>> {
 
   Future<void> _loadStoredAccount() async {
     try {
+      // Try to get from new Hive system first (has password for auto-login)
+      final authService = AuthService();
+      final savedCredentials = await authService.getSavedCredentials();
+      
+      if (savedCredentials != null && savedCredentials.password.isNotEmpty) {
+        print('🔑 Found saved credentials with password in Hive - will attempt auto-login');
+        state = AsyncValue.data(null); // Set to null so auto-login triggers
+        return;
+      }
+      
+      // Fallback to old system (SharedPreferences) for backward compatibility
       final storageRepo = ref.read(storageRepositoryProvider);
       final account = await storageRepo.getStoredAccount();
+      
+      if (account != null) {
+        print('🔑 Found account in SharedPreferences (no password) - manual login required');
+      } else {
+        print('🔑 No stored account found');
+      }
+      
       state = AsyncValue.data(account);
     } catch (error, stackTrace) {
+      print('❌ Error loading stored account: $error');
       state = AsyncValue.error(error, stackTrace);
     }
   }
@@ -323,26 +343,44 @@ class AccountNotifier extends StateNotifier<AsyncValue<SipAccountEntity?>> {
       await storageRepo.saveAccount(account);
       
       // Initialize connection stability monitoring
-      _connectionStability.initialize(sipRepo as SipRepositoryImpl);
+      _connectionStability.initialize(sipRepo);
       _connectionStability.setCurrentAccount(account);
       
       // Monitor connection status for a short period to detect immediate failures
       print('⏳ Monitoring initial connection status...');
-      await Future.delayed(Duration(seconds: 3));
+      await Future.delayed(Duration(seconds: 2));
       
       final connectionStatus = await sipRepo.getRegistrationStatus();
-      print('📊 Connection status after 3 seconds: $connectionStatus');
+      print('📊 Connection status after 2 seconds: $connectionStatus');
       
+      // Only fail if explicitly failed - be very lenient
       if (connectionStatus == ConnectionStatus.failed) {
+        print('❌ Connection explicitly failed, throwing error');
         throw Exception('SIP server connection failed. Please check:\n'
                        '• Network connectivity\n'
                        '• Server address: ${account.domain}\n'
                        '• WebSocket URL: ${account.wsUrl}\n'
                        '• Firewall/network restrictions');
-      }
+      } 
+      
+      // For all other states (connecting, connected, registered, disconnected), 
+      // assume success and let the connection stability service handle monitoring
+      print('✅ Connection attempt completed with status: $connectionStatus');
+      print('🔄 Connection monitoring will continue in background');
+      
+      // Save credentials to ensure we don't get stuck in auto-login loop
+      final authService = AuthService();
+      await authService.saveLoginCredentials(account);
       
       print('✅ SIP registration successful with direct connection');
+      print('🔄 Setting account state to: ${account.username}@${account.domain}');
+      
+      // Force state update with explicit timing
       state = AsyncValue.data(account);
+      
+      // Give UI a moment to react to state change
+      await Future.delayed(Duration(milliseconds: 100));
+      print('🔄 Account state has been set - UI should update now');
     } catch (error, stackTrace) {
       print('❌ Login failed: $error');
       state = AsyncValue.error(error, stackTrace);
@@ -469,7 +507,7 @@ class CallStateNotifier extends StateNotifier<CallEntity?> {
       if (state != null && state!.id == callId) {
         final endTime = DateTime.now();
         final duration = state!.startTime != null 
-            ? endTime.difference(state!.startTime!) 
+            ? endTime.difference(state!.startTime) 
             : Duration.zero;
             
         final finalCall = state!.copyWith(
@@ -559,11 +597,16 @@ class SettingsNotifier extends StateNotifier<AsyncValue<AppSettingsModel>> {
   }
 
   Future<void> updateTheme(ThemeMode themeMode) async {
+    print('🎨 Theme update requested: $themeMode');
     if (state.hasValue) {
       final currentSettings = state.value!;
+      print('🎨 Current theme before update: ${currentSettings.themeMode}');
       currentSettings.themeMode = themeMode;
       await _settingsService.saveSettings(currentSettings);
       state = AsyncValue.data(currentSettings);
+      print('🎨 Theme updated and saved to Hive: $themeMode');
+    } else {
+      print('❌ Settings state has no value, cannot update theme');
     }
   }
 

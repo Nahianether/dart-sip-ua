@@ -118,11 +118,7 @@ class AuthService {
 
   String? validateDomain(String? value) {
     if (value == null || value.isEmpty) {
-      return 'SIP URI is required';
-    }
-    // Validate SIP URI format (e.g., username@sip.example.com)
-    if (!RegExp(r'^[a-zA-Z0-9]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9.-]+$').hasMatch(value)) {
-      return 'Please enter a valid SIP URI (e.g., 123456@sip.example.com)';
+      return 'Domain is required';
     }
     return null;
   }

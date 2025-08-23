@@ -67,12 +67,35 @@ class _ModernCallScreenState extends ConsumerState<ModernCallScreen>
     super.dispose();
   }
 
-  void _onHangup() {
+  void _onHangup() async {
     HapticFeedback.heavyImpact();
-    ref.read(callStateProvider.notifier).endCall(widget.call.id);
     
-    // Navigate back to dial screen and clear call state
-    Navigator.of(context).popUntil((route) => route.isFirst);
+    try {
+      print('🔄 Hangup button pressed - ending call: ${widget.call.id}');
+      
+      // End the call with a timeout to prevent hanging
+      await ref.read(callStateProvider.notifier).endCall(widget.call.id).timeout(
+        Duration(seconds: 3),
+        onTimeout: () {
+          print('⚠️ Hangup timeout - forcing navigation');
+        },
+      );
+      
+      print('✅ Call ended successfully via hangup button');
+      
+    } catch (e) {
+      print('❌ Error during hangup: $e');
+    } finally {
+      // Always navigate back regardless of success/failure
+      if (mounted) {
+        print('🔄 Navigating back to dialer screen');
+        
+        // Clear the call state to ensure UI is updated
+        ref.read(callStateProvider.notifier).clearCall();
+        
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      }
+    }
   }
 
   void _onAccept() {
@@ -133,15 +156,7 @@ class _ModernCallScreenState extends ConsumerState<ModernCallScreen>
                 ],
               ),
             ),
-            child: SingleChildScrollView(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: MediaQuery.of(context).size.height - 
-                            MediaQuery.of(context).padding.top - 
-                            MediaQuery.of(context).padding.bottom,
-                ),
-                child: IntrinsicHeight(
-                  child: Column(
+            child: Column(
                     children: [
                       // Top section with call info
                       Expanded(
@@ -155,9 +170,6 @@ class _ModernCallScreenState extends ConsumerState<ModernCallScreen>
                         child: _buildCallControls(isIncomingCall),
                       ),
                     ],
-                  ),
-                ),
-              ),
             ),
           ),
         ),
@@ -305,7 +317,7 @@ class _ModernCallScreenState extends ConsumerState<ModernCallScreen>
 
   Widget _buildIncomingCallControls() {
     return Padding(
-      padding: EdgeInsets.all(32),
+      padding: EdgeInsets.fromLTRB(32, 16, 32, 32),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
@@ -355,7 +367,7 @@ class _ModernCallScreenState extends ConsumerState<ModernCallScreen>
 
   Widget _buildActiveCallControls() {
     return Padding(
-      padding: EdgeInsets.all(32),
+      padding: EdgeInsets.fromLTRB(32, 16, 32, 32),
       child: Column(
         children: [
           // Top row controls

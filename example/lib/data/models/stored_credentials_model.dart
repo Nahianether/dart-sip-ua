@@ -4,6 +4,7 @@ class StoredCredentialsModel {
   String? id;
   
   late String username;
+  late String password; // Now storing password for auto-login
   late String domain;
   late String wsUrl;
   String? displayName;
@@ -21,6 +22,7 @@ class StoredCredentialsModel {
     final model = StoredCredentialsModel()
       ..id = entity.id
       ..username = entity.username
+      ..password = entity.password
       ..domain = entity.domain
       ..wsUrl = entity.wsUrl
       ..displayName = entity.displayName
@@ -33,7 +35,7 @@ class StoredCredentialsModel {
     return SipAccountEntity(
       id: id ?? DateTime.now().millisecondsSinceEpoch.toString(),
       username: username,
-      password: '', // Password is not stored for security
+      password: password, // Password is now stored for auto-login
       domain: domain,
       wsUrl: wsUrl,
       displayName: displayName ?? username,

@@ -6,6 +6,7 @@ import '../src/vpn_manager.dart';
 import '../domain/entities/sip_account_entity.dart';
 import '../data/services/contacts_service.dart';
 import '../data/models/contact_model.dart';
+import '../utils/phone_number_formatter.dart';
 import 'modern_call_screen.dart';
 import 'recent_calls_screen.dart';
 import 'settings_screen.dart';
@@ -103,8 +104,19 @@ class _ModernDialerScreenState extends ConsumerState<ModernDialerScreen>
         return;
       }
       
-      // Make the call
-      ref.read(callStateProvider.notifier).makeCall(currentNumber);
+      // Format the phone number for SIP calling (remove +88/+880)
+      final formattedNumber = PhoneNumberFormatter.formatForSipCall(currentNumber);
+      
+      // Validate the number
+      if (!PhoneNumberFormatter.isValidPhoneNumber(formattedNumber)) {
+        _showErrorSnackBar('Please enter a valid phone number');
+        return;
+      }
+      
+      print('📞 Calling: $currentNumber -> $formattedNumber');
+      
+      // Make the call with formatted number
+      ref.read(callStateProvider.notifier).makeCall(formattedNumber);
     }
   }
 
@@ -319,13 +331,36 @@ class _ModernDialerScreenState extends ConsumerState<ModernDialerScreen>
                   ),
                   if (ref.watch(currentNumberProvider).isNotEmpty) ...[
                     SizedBox(height: 4),
-                    Text(
-                      'Ready to call',
-                      style: TextStyle(
-                        color: isDark ? Colors.grey[400] : Colors.grey[600],
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                      ),
+                    Consumer(
+                      builder: (context, ref, child) {
+                        final currentNumber = ref.watch(currentNumberProvider);
+                        final formattedNumber = PhoneNumberFormatter.formatForSipCall(currentNumber);
+                        final isFormatted = currentNumber != formattedNumber;
+                        
+                        return Column(
+                          children: [
+                            if (isFormatted) ...[
+                              Text(
+                                'Will call: $formattedNumber',
+                                style: TextStyle(
+                                  color: Colors.blue[600],
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                            ],
+                            Text(
+                              isFormatted ? 'Number formatted for calling' : 'Ready to call',
+                              style: TextStyle(
+                                color: isDark ? Colors.grey[400] : Colors.grey[600],
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                   ],
                 ],
@@ -572,36 +607,112 @@ class _ModernDialerScreenState extends ConsumerState<ModernDialerScreen>
             ),
           ),
           
-          // Load/Refresh contacts button
-          Container(
-            margin: EdgeInsets.only(bottom: 16),
-            child: ElevatedButton.icon(
-              onPressed: () async {
-                try {
-                  await ContactsService().loadDeviceContacts();
-                  ref.refresh(contactsProvider);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Contacts loaded successfully'),
-                      behavior: SnackBarBehavior.floating,
+          // Conditionally show Load Device Contacts button
+          Consumer(
+            builder: (context, ref, child) {
+              final contactsAsync = ref.watch(contactsProvider);
+              
+              return contactsAsync.when(
+                data: (contacts) {
+                  // Only show the button if no contacts are loaded
+                  if (contacts.isEmpty) {
+                    return Container(
+                      margin: EdgeInsets.only(bottom: 16),
+                      child: ElevatedButton.icon(
+                        onPressed: () async {
+                          try {
+                            await ContactsService().loadDeviceContacts();
+                            ref.refresh(contactsProvider);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Contacts loaded successfully'),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Error loading contacts: $e'),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          }
+                        },
+                        icon: Icon(Icons.contacts),
+                        label: Text('Load Device Contacts'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue[600],
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    );
+                  } else {
+                    // Contacts are loaded, show refresh button instead
+                    return Container(
+                      margin: EdgeInsets.only(bottom: 16),
+                      child: ElevatedButton.icon(
+                        onPressed: () async {
+                          try {
+                            await ContactsService().refreshContacts();
+                            ref.refresh(contactsProvider);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Contacts refreshed successfully'),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Error refreshing contacts: $e'),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          }
+                        },
+                        icon: Icon(Icons.refresh),
+                        label: Text('Refresh Contacts'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green[600],
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    );
+                  }
+                },
+                loading: () => Container(
+                  margin: EdgeInsets.only(bottom: 16),
+                  child: ElevatedButton.icon(
+                    onPressed: null, // Disabled while loading
+                    icon: SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
                     ),
-                  );
-                } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Error loading contacts: $e'),
-                      behavior: SnackBarBehavior.floating,
+                    label: Text('Loading...'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.grey[400],
+                      foregroundColor: Colors.white,
                     ),
-                  );
-                }
-              },
-              icon: Icon(Icons.refresh),
-              label: Text('Load Device Contacts'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue[600],
-                foregroundColor: Colors.white,
-              ),
-            ),
+                  ),
+                ),
+                error: (error, stack) => Container(
+                  margin: EdgeInsets.only(bottom: 16),
+                  child: ElevatedButton.icon(
+                    onPressed: () => ref.refresh(contactsProvider),
+                    icon: Icon(Icons.error_outline),
+                    label: Text('Retry Loading'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red[600],
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+              );
+            },
           ),
           
           // Contacts list
@@ -616,7 +727,7 @@ class _ModernDialerScreenState extends ConsumerState<ModernDialerScreen>
                     final filteredContacts = searchQuery.isEmpty 
                       ? contacts 
                       : contacts.where((contact) => 
-                          contact.displayName?.toLowerCase().contains(searchQuery.toLowerCase()) == true ||
+                          contact.displayName.toLowerCase().contains(searchQuery.toLowerCase()) == true ||
                           contact.phoneNumber.contains(searchQuery)
                         ).toList();
                     
@@ -745,13 +856,15 @@ class _ModernDialerScreenState extends ConsumerState<ModernDialerScreen>
                 size: 22,
               ),
               onPressed: () {
-                ref.read(currentNumberProvider.notifier).state = contact.phoneNumber;
-                _phoneController.text = contact.phoneNumber;
+                // Format the contact number for display
+                final formattedNumber = PhoneNumberFormatter.formatForSipCall(contact.phoneNumber);
+                ref.read(currentNumberProvider.notifier).state = formattedNumber;
+                _phoneController.text = formattedNumber;
                 _tabController.animateTo(0); // Switch to dialer tab
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('Number added: ${contact.phoneNumber}'),
-                    duration: Duration(seconds: 2),
+                    content: Text('Number added: $formattedNumber (formatted from ${contact.phoneNumber})'),
+                    duration: Duration(seconds: 3),
                     backgroundColor: Colors.green,
                   ),
                 );
