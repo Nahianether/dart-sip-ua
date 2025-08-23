@@ -1,16 +1,12 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
-import '../websocket_connection_manager.dart';
 import '../vpn_manager.dart';
 
-/// Widget to show VPN connection status
+/// Simplified widget to show VPN connection status
 class VPNStatusIndicator extends StatefulWidget {
-  final WebSocketConnectionManager? connectionManager;
   
   const VPNStatusIndicator({
-    Key? key,
-    this.connectionManager,
-  }) : super(key: key);
+    super.key,
+  });
 
   @override
   State<VPNStatusIndicator> createState() => _VPNStatusIndicatorState();
@@ -18,70 +14,35 @@ class VPNStatusIndicator extends StatefulWidget {
 
 class _VPNStatusIndicatorState extends State<VPNStatusIndicator> {
   VpnConnectionStatus _status = VpnConnectionStatus.disconnected;
-  late WebSocketConnectionManager _connectionManager;
+  final VPNManager _vpnManager = VPNManager();
 
   @override
   void initState() {
     super.initState();
-    _connectionManager = widget.connectionManager ?? WebSocketConnectionManager();
     
-    // Set up status listener first
+    // Set up status listener
     try {
-      _connectionManager.vpnManager.onVpnStatusChanged = (status) {
-        print('VPN Status listener triggered: $status');
+      _vpnManager.onVpnStatusChanged = (status) {
         if (mounted) {
           setState(() {
             _status = status;
           });
         }
       };
+      
+      // Get initial status
+      _updateStatus();
     } catch (e) {
-      print('Error setting up VPN status listener: $e');
+      print('VPN Status Indicator error: $e');
     }
-    
-    // Get initial status
-    _updateStatus();
-    
-    // Force an additional status check after a brief delay to catch any immediate changes
-    Future.delayed(Duration(milliseconds: 500), () {
-      if (mounted) {
-        _updateStatus();
-      }
-    });
-    
-    // Update status periodically
-    Timer.periodic(Duration(seconds: 2), (timer) {
-      if (mounted) {
-        _updateStatus();
-      } else {
-        timer.cancel();
-      }
-    });
   }
 
   void _updateStatus() {
-    try {
-      final vpnManager = _connectionManager.vpnManager;
-      final currentStatus = vpnManager.currentStatus;
-      
-      // Debug logging to track status changes
-      if (_status != currentStatus) {
-        print('VPN Status changing from $_status to $currentStatus');
-      }
-      
-      if (mounted) {
-        setState(() {
-          _status = currentStatus;
-        });
-      }
-    } catch (e) {
-      print('Error updating VPN status: $e');
-      if (mounted) {
-        setState(() {
-          _status = VpnConnectionStatus.disconnected;
-        });
-      }
-    }
+    setState(() {
+      _status = _vpnManager.isConnected 
+        ? VpnConnectionStatus.connected 
+        : VpnConnectionStatus.disconnected;
+    });
   }
 
   @override
@@ -89,28 +50,24 @@ class _VPNStatusIndicatorState extends State<VPNStatusIndicator> {
     return Container(
       padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: _getStatusColor().withValues(alpha: 0.1),
+        color: _getStatusColor(_status),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: _getStatusColor(),
-          width: 1,
-        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-            _getStatusIcon(),
-            color: _getStatusColor(),
+            _getStatusIcon(_status),
             size: 16,
+            color: Colors.white,
           ),
-          SizedBox(width: 6),
+          SizedBox(width: 4),
           Text(
-            _getStatusText(),
+            _getStatusText(_status),
             style: TextStyle(
-              color: _getStatusColor(),
-              fontWeight: FontWeight.w500,
+              color: Colors.white,
               fontSize: 12,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ],
@@ -118,49 +75,54 @@ class _VPNStatusIndicatorState extends State<VPNStatusIndicator> {
     );
   }
 
-  Color _getStatusColor() {
-    switch (_status) {
+  Color _getStatusColor(VpnConnectionStatus status) {
+    switch (status) {
       case VpnConnectionStatus.connected:
         return Colors.green;
       case VpnConnectionStatus.connecting:
         return Colors.orange;
-      case VpnConnectionStatus.error:
-      case VpnConnectionStatus.denied:
-        return Colors.red;
       case VpnConnectionStatus.disconnected:
-      default:
-        return Colors.grey;
+        return Colors.red;
+      case VpnConnectionStatus.error:
+        return Colors.red[700]!;
+      case VpnConnectionStatus.denied:
+        return Colors.orange;
     }
   }
 
-  IconData _getStatusIcon() {
-    switch (_status) {
+  IconData _getStatusIcon(VpnConnectionStatus status) {
+    switch (status) {
       case VpnConnectionStatus.connected:
         return Icons.vpn_lock;
       case VpnConnectionStatus.connecting:
-        return Icons.sync;
-      case VpnConnectionStatus.error:
-      case VpnConnectionStatus.denied:
-        return Icons.error;
+        return Icons.vpn_key;
       case VpnConnectionStatus.disconnected:
-      default:
         return Icons.vpn_key_off;
+      case VpnConnectionStatus.error:
+        return Icons.error;
+      case VpnConnectionStatus.denied:
+        return Icons.block;
     }
   }
 
-  String _getStatusText() {
-    switch (_status) {
+  String _getStatusText(VpnConnectionStatus status) {
+    switch (status) {
       case VpnConnectionStatus.connected:
         return 'VPN Connected';
       case VpnConnectionStatus.connecting:
-        return 'VPN Connecting';
+        return 'Connecting...';
+      case VpnConnectionStatus.disconnected:
+        return 'VPN Off';
       case VpnConnectionStatus.error:
         return 'VPN Error';
       case VpnConnectionStatus.denied:
         return 'VPN Denied';
-      case VpnConnectionStatus.disconnected:
-      default:
-        return 'VPN Disconnected';
     }
+  }
+
+  @override
+  void dispose() {
+    _vpnManager.onVpnStatusChanged = null;
+    super.dispose();
   }
 }

@@ -63,13 +63,6 @@ class VPNManager {
       // Load saved VPN settings
       await _loadSavedSettings();
       
-      // Auto-connect immediately if enabled and configured
-      if (_shouldAutoConnect && isConfigured) {
-        _logger.i('🚀 Auto-connecting VPN on app startup...');
-        // Connect in background without blocking initialization
-        Future.delayed(Duration(milliseconds: 1000), () => connect());
-      }
-      
       _logger.i('VPNManager: Initialization complete');
     } catch (e) {
       _logger.e('VPNManager: Initialization failed: $e');
@@ -130,20 +123,19 @@ class VPNManager {
       onVpnStatusChanged?.call(_currentStatus);
       _logger.i('📡 VPN status: connecting');
 
-      // Force immediate connection for user experience
-      _logger.i('🚀 Connecting to VPN server $_serverAddress with hardcoded credentials...');
+      // Always use simulation mode for consistent results
+      _logger.i('🔄 Using simulated VPN mode for consistent development/testing');
       
-      // Set connected status immediately for seamless UX
+      // Simulate realistic connection time
+      await Future.delayed(Duration(milliseconds: 1500));
+      
+      // Set connected status consistently
       _currentStatus = VpnConnectionStatus.connected;
       _isConnecting = false;
       _lastError = null;
       
-      // Notify status change immediately
+      // Notify status change immediately and consistently
       onVpnStatusChanged?.call(_currentStatus);
-      
-      _logger.i('✅ VPN connection established successfully to $_serverAddress:1194');
-      _logger.i('👤 Connected as: $_username');
-      _logger.i('🔒 Secure tunnel active for SIP communication');
       
       _logger.i('✅ Simulated VPN connection established - Status: $_currentStatus');
       _logger.i('🔍 Connection info: ${getConnectionInfo()}');
@@ -214,102 +206,6 @@ class VPNManager {
 
   /// Check if VPN is configured
   bool get isConfigured => _configString != null && _username != null && _password != null;
-
-  /// Configure VPN settings
-  Future<void> configure({
-    required String configString,
-    required String serverAddress,
-    required String username,
-    required String password,
-  }) async {
-    try {
-      _logger.i('🔧 Configuring VPN settings...');
-      
-      _configString = configString;
-      _serverAddress = serverAddress;
-      _username = username;
-      _password = password;
-      
-      // Save settings to SharedPreferences for persistence
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('vpn_config', configString);
-      await prefs.setString('vpn_server', serverAddress);
-      await prefs.setString('vpn_username', username);
-      await prefs.setString('vpn_password', password);
-      
-      _logger.i('✅ VPN configuration saved successfully');
-    } catch (e) {
-      _logger.e('❌ Failed to configure VPN: $e');
-      _lastError = e.toString();
-      rethrow;
-    }
-  }
-  
-  /// Load saved VPN settings
-  Future<void> _loadSavedSettings() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      
-      _configString = prefs.getString('vpn_config');
-      _serverAddress = prefs.getString('vpn_server');
-      _username = prefs.getString('vpn_username');
-      _password = prefs.getString('vpn_password');
-      _shouldAutoConnect = prefs.getBool('vpn_auto_connect') ?? true; // Default to auto-connect
-      
-      if (isConfigured) {
-        _logger.i('✅ VPN settings loaded from storage (auto-connect: $_shouldAutoConnect)');
-      } else {
-        _logger.i('ℹ️ No saved VPN settings found - setting up hardcoded configuration');
-        // Set hardcoded configuration for seamless operation
-        await _setDefaultConfiguration();
-      }
-    } catch (e) {
-      _logger.w('⚠️ Failed to load VPN settings: $e');
-      // Fallback to hardcoded configuration
-      await _setDefaultConfiguration();
-    }
-  }
-  
-  /// Set default VPN configuration for automatic operation
-  Future<void> _setDefaultConfiguration() async {
-    try {
-      _logger.i('🔧 Setting up hardcoded VPN configuration...');
-      
-      // Hardcoded VPN configuration with real server credentials
-      _configString = '''
-# Hardcoded VPN configuration for secure SIP tunneling
-client
-dev tun
-proto udp
-remote 103.95.97.72 1194
-port 1194
-resolv-retry infinite
-nobind
-persist-key
-persist-tun
-auth-user-pass
-verb 3
-cipher AES-256-CBC
-auth SHA256
-key-direction 1
-remote-cert-tls server
-comp-lzo
-      ''';
-      _serverAddress = '103.95.97.72';
-      _username = 'intishar';
-      _password = 'ibos@123';
-      
-      // Enable auto-connect by default
-      _shouldAutoConnect = true;
-      
-      // Save the hardcoded configuration
-      await saveSettings();
-      
-      _logger.i('✅ Hardcoded VPN configuration set and saved');
-    } catch (e) {
-      _logger.w('⚠️ Failed to set hardcoded configuration: $e');
-    }
-  }
 
   /// Get VPN connection info
   Map<String, dynamic> getConnectionInfo() {
@@ -430,6 +326,20 @@ verb 3
     }
   }
 
+  Future<void> _loadSavedSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _configString = prefs.getString('vpn_config');
+      _serverAddress = prefs.getString('vpn_server');
+      _username = prefs.getString('vpn_username');
+      _password = prefs.getString('vpn_password');
+      _shouldAutoConnect = prefs.getBool('vpn_auto_connect') ?? false;
+      
+      _logger.i('VPN settings loaded - Configured: $isConfigured, Auto-connect: $_shouldAutoConnect');
+    } catch (e) {
+      _logger.e('Failed to load VPN settings: $e');
+    }
+  }
 
   /// Clear all VPN settings
   Future<void> clearSettings() async {

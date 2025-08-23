@@ -293,7 +293,7 @@ class PersistentBackgroundService {
     WidgetsFlutterBinding.ensureInitialized();
     DartPluginRegistrant.ensureInitialized();
     
-    print('🍎 iOS background service activated');
+    print('📱 iOS background service activated');
     return true;
   }
 
@@ -1036,6 +1036,736 @@ class PersistentBackgroundService {
       print('⚠️ Cannot re-register: user=${_currentSipUser != null}, mainAppActive=$_isMainAppActive');
     }
   }
+  
+  @pragma('vm:entry-point')
+  static void _handleAndroidBackgroundRegistration() {
+    print('🤖 ANDROID: Starting background SIP registration');
+    
+    if (_isMainAppActive) {
+      print('⚠️ ANDROID: Main app still active - aborting');
+      return;
+    }
+    
+    if (_currentSipUser == null) {
+      print('❌ ANDROID: No SIP user configuration');
+      _loadSipUserFromPreferences();
+      return;
+    }
+    
+    print('🚀 ANDROID: Performing background registration');
+    _performAndroidBackgroundRegistration();
+  }
+  
+  @pragma('vm:entry-point')
+  static void _performAndroidBackgroundRegistration() async {
+    try {
+      print('🤖 ANDROID: Performing background registration');
+      
+      if (_isMainAppActive) {
+        print('⚠️ ANDROID: Main app became active - aborting');
+        return;
+      }
+      
+      if (_backgroundSipHelper == null) {
+        _backgroundSipHelper = SIPUAHelper();
+        if (_serviceInstance != null) {
+          final listener = PersistentSipListener(_serviceInstance!);
+          _backgroundSipHelper!.addSipUaHelperListener(listener);
+        }
+      }
+      
+      await Future.delayed(Duration(seconds: 2));
+      
+      if (_isMainAppActive) {
+        print('⚠️ ANDROID: Main app active during wait - aborting');
+        return;
+      }
+      
+      await _connectSipInBackground(_currentSipUser!);
+      
+      _updateServiceNotification(
+        'SIP Phone (Background)', 
+        'Connected - ready for calls'
+      );
+      
+      print('✅ ANDROID: Background registration completed');
+      
+    } catch (e) {
+      print('❌ ANDROID: Registration failed: $e');
+      
+      Timer(Duration(seconds: 10), () {
+        if (!_isMainAppActive && _currentSipUser != null) {
+          _performAndroidBackgroundRegistration();
+        }
+      });
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static void _startAndroidKeepAlive() {
+    print('💗 ANDROID: Starting keep-alive mechanism for 24/7 operation');
+    
+    // More frequent keep-alive for better reliability in background
+    Timer.periodic(Duration(seconds: 20), (timer) {
+      if (_isMainAppActive) {
+        print('📱 ANDROID: Main app active - pausing keep-alive');
+        return;
+      }
+      
+      if (_backgroundSipHelper == null || !_backgroundSipHelper!.registered) {
+        print('⚠️ ANDROID: SIP connection lost - attempting reconnection');
+        
+        if (_currentSipUser != null) {
+          _performAndroidBackgroundRegistration();
+        }
+      } else {
+        print('💚 ANDROID: Background SIP healthy - keeping alive');
+        
+        // Update notification to show active status
+        _updateServiceNotification(
+          'SIP Phone (24/7 Active)', 
+          'Connected to ${_currentSipUser?.authUser ?? "SIP"} - receiving calls'
+        );
+      }
+    });
+  }
+  
+  @pragma('vm:entry-point')
+  static void _handleIOSVoIPCoordination() {
+    print('🍎 iOS: Configuring VoIP coordination mode');
+    print('📊 iOS: Background helper status: ${_backgroundSipHelper != null}');
+    print('📊 iOS: Current SIP user: ${_currentSipUser != null}');
+    print('📊 iOS: Service running: $_isServiceRunning');
+    
+    // iOS approach: Don't compete with main app, coordinate VoIP
+    print('📱 iOS VoIP: Background service acts as notification coordinator only');
+    
+    // Ensure we have configuration for coordination
+    if (_currentSipUser == null) {
+      print('📋 iOS: Loading SIP configuration for coordination...');
+      _loadSipUserFromPreferences();
+    }
+    
+    // Update notification for iOS coordination mode
+    _updateServiceNotification(
+      'SIP Phone (iOS VoIP Ready)', 
+      'Coordinating with iOS system for background calls'
+    );
+    
+    print('✅ iOS: VoIP coordination configured');
+  }
+  
+  @pragma('vm:entry-point')
+  static void _attemptServiceRecovery() async {
+    try {
+      print('🚪🚪🚪 RECOVERY: Attempting to recover background service... 🚪🚪🚪');
+      
+      // Check platform and use appropriate recovery approach
+      if (Platform.isIOS) {
+        print('🍎 RECOVERY: iOS detected - using immediate registration approach');
+        print('🍎 RECOVERY: iOS background limitations - starting direct SIP in main isolate');
+        _startImmediateIOSRegistration();
+      } else if (Platform.isAndroid) {
+        print('🤖 RECOVERY: Android detected - using background service restart');
+        _forceServiceRestart();
+      } else {
+        print('❓ RECOVERY: Unknown platform - using force restart');
+        _forceServiceRestart();
+      }
+      
+    } catch (e) {
+      print('❌ Error during service recovery: $e');
+      _forceServiceRestart();
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static void _startImmediateIOSRegistration() async {
+    print('🍎⚡ iOS IMMEDIATE: Starting immediate SIP registration in main isolate ⚡🍎');
+    
+    try {
+      // Load SIP configuration immediately
+      final prefs = await SharedPreferences.getInstance();
+      final savedUserJson = prefs.getString('websocket_sip_user');
+      
+      if (savedUserJson == null) {
+        print('❌ iOS IMMEDIATE: No SIP configuration found');
+        return;
+      }
+      
+      final sipUser = SipUser.fromJsonString(savedUserJson);
+      _currentSipUser = sipUser;
+      print('📋 iOS IMMEDIATE: Loaded SIP user: ${sipUser.authUser}');
+      
+      // Create minimal SIP helper immediately
+      print('🔄 iOS IMMEDIATE: Creating minimal SIP helper for immediate registration...');
+      _backgroundSipHelper = SIPUAHelper();
+      
+      // Add simple listener
+      final listener = IOSFallbackSipListener();
+      _backgroundSipHelper!.addSipUaHelperListener(listener);
+      
+      // Force service running flag
+      _isServiceRunning = true;
+      _isMainAppActive = false;
+      
+      print('🚀 iOS IMMEDIATE: Starting immediate SIP connection...');
+      
+      // Use minimal settings for maximum compatibility
+      UaSettings settings = UaSettings();
+      settings.webSocketUrl = sipUser.wsUrl!;
+      settings.uri = sipUser.sipUri ?? 'sip:${sipUser.authUser}@sip.ibos.io';
+      settings.authorizationUser = sipUser.authUser;
+      settings.password = sipUser.password;
+      settings.displayName = sipUser.displayName;
+      settings.transportType = TransportType.WS;
+      
+      print('📝 iOS IMMEDIATE: Settings: WebSocket=${settings.webSocketUrl}, URI=${settings.uri}');
+      
+      // Start and register immediately
+      print('🔥 iOS IMMEDIATE: Starting SIP helper...');
+      _backgroundSipHelper!.start(settings);
+      
+      // Short delay then register
+      await Future.delayed(Duration(seconds: 1));
+      
+      print('🔥 iOS IMMEDIATE: Registering with SIP server...');
+      _backgroundSipHelper!.register();
+      
+      print('✅ iOS IMMEDIATE: Immediate registration process completed');
+      
+      // Check status after a moment
+      Timer(Duration(seconds: 3), () {
+        final registered = _backgroundSipHelper?.registered ?? false;
+        print('📊 iOS IMMEDIATE: Registration status: $registered');
+        
+        if (registered) {
+          print('🎉 iOS IMMEDIATE: Successfully registered with SIP server!');
+          _updateServiceNotification(
+            'SIP Phone (iOS Ready)', 
+            'Ready to receive calls'
+          );
+        } else {
+          print('⚠️ iOS IMMEDIATE: Registration may still be in progress...');
+        }
+      });
+      
+    } catch (e) {
+      print('❌ iOS IMMEDIATE: Failed: $e');
+    }
+  }
+
+  @pragma('vm:entry-point')
+  static void _forceServiceRestart() async {
+    try {
+      print('🔥 Force restarting background service...');
+      
+      final service = FlutterBackgroundService();
+      
+      // Force stop and restart
+      service.invoke('stopService');
+      await Future.delayed(Duration(seconds: 1));
+      
+      await service.startService();
+      await Future.delayed(Duration(seconds: 3));
+      
+      final isRunning = await service.isRunning();
+      print('📊 Force restart result: $isRunning');
+      
+      if (isRunning) {
+        print('✅ Force restart successful - retrying registration');
+        Timer(Duration(seconds: 2), () {
+          _reregisterAfterMainAppBackground();
+        });
+      } else {
+        print('❌❌ Force restart failed - service cannot be recovered');
+      }
+      
+    } catch (e) {
+      print('❌ Error in force restart: $e');
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static void _tryDirectSipRegistration() async {
+    print('🍎🍎🍎 iOS FALLBACK: Starting direct SIP registration process 🍎🍎🍎');
+    
+    try {
+      print('🔍 iOS FALLBACK: Step 1 - Loading SIP configuration from SharedPreferences...');
+      
+      // Load SIP user from preferences
+      final prefs = await SharedPreferences.getInstance();
+      print('📁 iOS FALLBACK: SharedPreferences instance obtained');
+      
+      final savedUserJson = prefs.getString('websocket_sip_user');
+      print('📄 iOS FALLBACK: Raw saved user JSON: ${savedUserJson != null ? "Found (${savedUserJson.length} chars)" : "NULL"}');
+      
+      if (savedUserJson == null) {
+        print('❌ iOS FALLBACK: No SIP user configuration found in SharedPreferences');
+        print('❌ iOS FALLBACK: Cannot proceed without SIP configuration');
+        return;
+      }
+      
+      print('✅ iOS FALLBACK: Found SIP configuration in SharedPreferences');
+      print('🔄 iOS FALLBACK: Step 2 - Parsing SIP user configuration...');
+      
+      final sipUser = SipUser.fromJsonString(savedUserJson);
+      print('📋 iOS FALLBACK: Successfully parsed SIP user:');
+      print('  - Auth User: ${sipUser.authUser}');
+      print('  - Display Name: ${sipUser.displayName}');
+      print('  - WebSocket URL: ${sipUser.wsUrl}');
+      print('  - SIP URI: ${sipUser.sipUri}');
+      
+      // Set current user immediately
+      _currentSipUser = sipUser;
+      print('✅ iOS FALLBACK: SIP user stored in memory');
+      
+      print('🔄 iOS FALLBACK: Step 3 - Setting up SIP helper...');
+      
+      // Create a new SIP helper for direct registration
+      if (_backgroundSipHelper == null) {
+        print('🔗 iOS FALLBACK: Creating new SIP helper instance...');
+        _backgroundSipHelper = SIPUAHelper();
+        print('✅ iOS FALLBACK: SIP helper instance created (${_backgroundSipHelper.hashCode})');
+        
+        // For iOS fallback, create a simple listener
+        print('🎧 iOS FALLBACK: Adding iOS-specific listener...');
+        final listener = IOSFallbackSipListener();
+        _backgroundSipHelper!.addSipUaHelperListener(listener);
+        print('✅ iOS FALLBACK: iOS listener added to SIP helper');
+      } else {
+        print('✅ iOS FALLBACK: SIP helper already exists (${_backgroundSipHelper.hashCode})');
+        print('📊 iOS FALLBACK: Helper status - Registered: ${_backgroundSipHelper!.registered}');
+      }
+      
+      print('🔄 iOS FALLBACK: Step 4 - Setting service flags...');
+      
+      // Set flags for direct operation
+      _isServiceRunning = true; // Force this for iOS
+      _isMainAppActive = false; // Ensure background mode
+      print('🏃 iOS FALLBACK: Service flags set:');
+      print('  - Service Running: $_isServiceRunning');
+      print('  - Main App Active: $_isMainAppActive');
+      
+      print('🔄 iOS FALLBACK: Step 5 - Starting SIP connection...');
+      print('🚀🚀 iOS FALLBACK: Initiating SIP connection to server... 🚀🚀');
+      
+      // Use enhanced connection method with detailed logging
+      await _connectSipInBackgroundWithDetailedLogging(sipUser);
+      
+      print('✅✅ iOS FALLBACK: SIP connection process completed successfully ✅✅');
+      
+      // Verify final status
+      print('🔄 iOS FALLBACK: Step 6 - Verifying final registration status...');
+      print('📊 iOS FALLBACK: Final status:');
+      print('  - Helper exists: ${_backgroundSipHelper != null}');
+      print('  - Helper registered: ${_backgroundSipHelper?.registered ?? false}');
+      print('  - Service running: $_isServiceRunning');
+      print('  - Current SIP user: ${_currentSipUser?.authUser ?? "none"}');
+      
+      if (_backgroundSipHelper?.registered == true) {
+        print('🍎✅ iOS FALLBACK: Successfully registered to SIP server!');
+        
+        // Update notification to show success
+        _updateServiceNotification(
+          'SIP Phone (iOS Background)', 
+          'Connected to SIP server - ready for calls'
+        );
+      } else {
+        print('🍎❌ iOS FALLBACK: Registration not confirmed - may have failed');
+      }
+      
+    } catch (e) {
+      print('❌❌ iOS FALLBACK: Direct SIP registration failed with error: $e ❌❌');
+      print('🔍 iOS FALLBACK: Error details: ${e.toString()}');
+      print('🔍 iOS FALLBACK: Stack trace: ${StackTrace.current}');
+      
+      // Try one more time with a simplified approach
+      print('🔄 iOS FALLBACK: Attempting simplified fallback...');
+      _trySimplifiedIOSFallback();
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static void _trySimplifiedIOSFallback() async {
+    print('🍎🔥 iOS SIMPLIFIED: Last resort iOS background SIP registration 🔥🍎');
+    
+    try {
+      // Get the most basic SIP configuration
+      final prefs = await SharedPreferences.getInstance();
+      final savedUserJson = prefs.getString('websocket_sip_user');
+      
+      if (savedUserJson == null) {
+        print('❌ iOS SIMPLIFIED: No SIP config - giving up');
+        return;
+      }
+      
+      final sipUser = SipUser.fromJsonString(savedUserJson);
+      print('📋 iOS SIMPLIFIED: Using config for ${sipUser.authUser}');
+      
+      // Create minimal SIP helper
+      _backgroundSipHelper = SIPUAHelper();
+      _currentSipUser = sipUser;
+      _isServiceRunning = true;
+      
+      print('🚀 iOS SIMPLIFIED: Starting minimal SIP registration...');
+      
+      // Use the simplest possible connection
+      await _connectSipMinimal(sipUser);
+      
+      print('✅ iOS SIMPLIFIED: Minimal registration attempt completed');
+      
+    } catch (e) {
+      print('❌❌ iOS SIMPLIFIED: Even simplified approach failed: $e ❌❌');
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static Future<void> _connectSipInBackgroundWithDetailedLogging(SipUser user) async {
+    try {
+      print('🔌🔌🔌 DETAILED CONNECTION: Starting enhanced SIP connection process 🔌🔌🔌');
+      print('📊 DETAILED: Input parameters:');
+      print('  - User: ${user.authUser}');
+      print('  - WebSocket URL: ${user.wsUrl}');
+      print('  - Display Name: ${user.displayName}');
+      
+      // Always create a fresh SIP helper for iOS fallback to avoid state issues
+      print('🔄 DETAILED: Creating fresh SIP helper for iOS fallback...');
+      if (_backgroundSipHelper != null) {
+        print('🧹 DETAILED: Cleaning up existing helper...');
+        try {
+          if (_backgroundSipHelper!.registered) {
+            await _backgroundSipHelper!.unregister();
+          }
+          _backgroundSipHelper!.stop();
+        } catch (e) {
+          print('⚠️ DETAILED: Error cleaning up old helper: $e');
+        }
+        _backgroundSipHelper = null;
+      }
+      
+      print('🆕 DETAILED: Creating completely new SIP helper instance...');
+      _backgroundSipHelper = SIPUAHelper();
+      print('✅ DETAILED: Fresh SIP helper created (${_backgroundSipHelper.hashCode})');
+      
+      // Add iOS fallback listener immediately
+      print('🎧 DETAILED: Adding iOS fallback listener...');
+      final listener = IOSFallbackSipListener();
+      _backgroundSipHelper!.addSipUaHelperListener(listener);
+      print('✅ DETAILED: Listener added to fresh helper');
+      
+      print('🔧 DETAILED: Setting up UA Settings...');
+      UaSettings settings = UaSettings();
+      
+      // Parse SIP configuration with detailed logging
+      String sipUri = user.sipUri ?? '';
+      String username = user.authUser;
+      String domain = '';
+      
+      print('📝 DETAILED: Parsing SIP URI: $sipUri');
+      
+      if (sipUri.contains('@')) {
+        final parts = sipUri.split('@');
+        if (parts.length > 1) {
+          username = parts[0].replaceAll('sip:', '');
+          domain = parts[1];
+          print('📝 DETAILED: Extracted from SIP URI - Username: $username, Domain: $domain');
+        }
+      } else if (user.wsUrl != null && user.wsUrl!.isNotEmpty) {
+        try {
+          final uri = Uri.parse(user.wsUrl!);
+          domain = uri.host;
+          print('📝 DETAILED: Extracted domain from WebSocket URL: $domain');
+        } catch (e) {
+          print('⚠️ DETAILED: Failed to parse domain from WebSocket URL: $e');
+          domain = 'localhost';
+        }
+      }
+      
+      String properSipUri = 'sip:$username@$domain';
+      print('📝 DETAILED: Final SIP URI: $properSipUri');
+      
+      // Configure settings with detailed logging and validation
+      print('🔧 DETAILED: Configuring and validating UA settings...');
+      if (user.wsUrl == null || user.wsUrl!.isEmpty) {
+        throw Exception('WebSocket URL is null or empty');
+      }
+      if (user.authUser.isEmpty) {
+        throw Exception('Auth user is empty');
+      }
+      if (user.password.isEmpty) {
+        throw Exception('Password is empty');
+      }
+      
+      settings.webSocketUrl = user.wsUrl!;
+      settings.webSocketSettings.extraHeaders = user.wsExtraHeaders ?? <String, dynamic>{};
+      settings.uri = properSipUri;
+      settings.authorizationUser = user.authUser;
+      settings.password = user.password;
+      settings.displayName = user.displayName;
+      settings.userAgent = 'SIP Phone Flutter Background Service';
+      settings.dtmfMode = DtmfMode.RFC2833;
+      
+      print('📝 DETAILED: Settings configured and validated:');
+      print('  - WebSocket URL: ${settings.webSocketUrl}');
+      print('  - SIP URI: ${settings.uri}');
+      print('  - Auth User: ${settings.authorizationUser}');
+      print('  - Display Name: ${settings.displayName}');
+      print('  - User Agent: ${settings.userAgent}');
+      
+      print('🚀 DETAILED: Starting SIP helper with validated settings...');
+      
+      // Wrap start in try-catch to handle the null check error specifically
+      try {
+        _backgroundSipHelper!.start(settings);
+        print('✅ DETAILED: SIP helper start() called successfully');
+      } catch (startError) {
+        print('❌ DETAILED: SIP helper start() failed: $startError');
+        print('🔄 DETAILED: Attempting to recreate helper and retry...');
+        
+        // Create a completely new helper and try again
+        _backgroundSipHelper = SIPUAHelper();
+        final newListener = IOSFallbackSipListener();
+        _backgroundSipHelper!.addSipUaHelperListener(newListener);
+        
+        // Try with a minimal settings configuration
+        UaSettings minimalSettings = UaSettings();
+        minimalSettings.webSocketUrl = user.wsUrl!;
+        minimalSettings.uri = properSipUri;
+        minimalSettings.authorizationUser = user.authUser;
+        minimalSettings.password = user.password;
+        
+        print('🚀 DETAILED: Retrying with minimal settings...');
+        _backgroundSipHelper!.start(minimalSettings);
+        print('✅ DETAILED: SIP helper started with minimal settings');
+      }
+      
+      // Wait longer for start to complete
+      print('⏳ DETAILED: Waiting for SIP helper to fully initialize...');
+      await Future.delayed(Duration(seconds: 5));
+      
+      // Check if the helper is ready before registering
+      print('🔍 DETAILED: Checking helper readiness before registration...');
+      print('  - Helper exists: ${_backgroundSipHelper != null}');
+      print('  - Helper registered: ${_backgroundSipHelper?.registered ?? false}');
+      
+      print('📞 DETAILED: Attempting SIP registration...');
+      try {
+        _backgroundSipHelper!.register();
+        print('✅ DETAILED: Registration call completed');
+      } catch (regError) {
+        print('❌ DETAILED: Registration call failed: $regError');
+        rethrow;
+      }
+      
+      print('✅✅ DETAILED CONNECTION: SIP helper started and registration attempted ✅✅');
+      
+      // Wait for registration confirmation with multiple checks
+      print('⏳ DETAILED: Waiting for registration confirmation...');
+      for (int i = 0; i < 3; i++) {
+        await Future.delayed(Duration(seconds: 3));
+        final isRegistered = _backgroundSipHelper?.registered ?? false;
+        print('📊 DETAILED: Registration check ${i + 1}/3: $isRegistered');
+        
+        if (isRegistered) {
+          print('🎉🎉 DETAILED: SIP registration successful! 🎉🎉');
+          
+          // Update notification
+          _updateServiceNotification(
+            'SIP Phone (iOS Connected)', 
+            'Connected to $domain - ready for calls'
+          );
+          return;
+        }
+      }
+      
+      print('⚠️ DETAILED: Registration did not complete within timeout');
+      
+    } catch (e) {
+      print('❌❌ DETAILED CONNECTION: Enhanced connection failed: $e ❌❌');
+      print('🔍 DETAILED: Error details: ${e.toString()}');
+      print('🔍 DETAILED: Stack trace: ${StackTrace.current}');
+      
+      // Try the simplified approach as last resort
+      print('🔄 DETAILED: Falling back to simplified approach...');
+      await _connectSipMinimal(user);
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static Future<void> _connectSipMinimal(SipUser user) async {
+    try {
+      print('⚡ MINIMAL: Starting basic SIP connection with fresh helper...');
+      
+      // Create a completely new helper for minimal approach
+      _backgroundSipHelper = SIPUAHelper();
+      print('⚡ MINIMAL: New helper created (${_backgroundSipHelper.hashCode})');
+      
+      // Add minimal listener
+      final listener = IOSFallbackSipListener();
+      _backgroundSipHelper!.addSipUaHelperListener(listener);
+      print('⚡ MINIMAL: Listener added');
+      
+      // Create minimal settings
+      UaSettings settings = UaSettings();
+      settings.webSocketUrl = user.wsUrl!;
+      settings.uri = user.sipUri ?? 'sip:${user.authUser}@sip.ibos.io';
+      settings.authorizationUser = user.authUser;
+      settings.password = user.password;
+      settings.displayName = user.displayName;
+      settings.userAgent = 'SIP Phone iOS Minimal';
+      
+      print('⚡ MINIMAL: Settings prepared:');
+      print('  - WebSocket URL: ${settings.webSocketUrl}');
+      print('  - SIP URI: ${settings.uri}');
+      print('  - Auth User: ${settings.authorizationUser}');
+      
+      print('🚀 MINIMAL: Starting helper with basic settings...');
+      try {
+        _backgroundSipHelper!.start(settings);
+        print('✅ MINIMAL: Start successful');
+      } catch (startError) {
+        print('❌ MINIMAL: Start failed: $startError');
+        return;
+      }
+      
+      print('⏳ MINIMAL: Waiting for initialization...');
+      await Future.delayed(Duration(seconds: 3));
+      
+      print('📞 MINIMAL: Attempting registration...');
+      try {
+        _backgroundSipHelper!.register();
+        print('✅ MINIMAL: Registration call made');
+      } catch (regError) {
+        print('❌ MINIMAL: Registration failed: $regError');
+        return;
+      }
+      
+      print('⏳ MINIMAL: Waiting for registration result...');
+      await Future.delayed(Duration(seconds: 5));
+      
+      final registered = _backgroundSipHelper?.registered ?? false;
+      print('📊 MINIMAL: Final registration status: $registered');
+      
+      if (registered) {
+        print('🎉 MINIMAL: Basic registration successful!');
+        _updateServiceNotification(
+          'SIP Phone (iOS Minimal)', 
+          'Basic connection established - ready for calls'
+        );
+      } else {
+        print('❌ MINIMAL: Registration did not complete');
+      }
+      
+    } catch (e) {
+      print('❌ MINIMAL: Basic connection failed: $e');
+      print('❌ MINIMAL: Error details: ${e.toString()}');
+    }
+  }
+
+  @pragma('vm:entry-point')
+  static void _performBackgroundRegistration() async {
+    try {
+      print('🚀🚀🚀 ASYNC: Starting background registration process 🚀🚀🚀');
+      
+      // Initialize SIP helper if it doesn't exist
+      if (_backgroundSipHelper == null) {
+        print('🔗 ASYNC: Initializing background SIP helper for re-registration...');
+        _backgroundSipHelper = SIPUAHelper();
+        
+        // Add listener if service instance is available
+        if (_serviceInstance != null) {
+          final listener = PersistentSipListener(_serviceInstance!);
+          _backgroundSipHelper!.addSipUaHelperListener(listener);
+          print('✅ ASYNC: Background SIP listener added during re-registration');
+        } else {
+          print('⚠️ ASYNC: Service instance not available for listener');
+          print('⚠️ ASYNC: This suggests the service is not properly running');
+        }
+      } else {
+        print('✅ ASYNC: Background SIP helper already exists');
+      }
+      
+      // Check if already registered
+      if (_backgroundSipHelper!.registered) {
+        print('✅ ASYNC: Background SIP helper already registered');
+        return;
+      }
+      
+      // Small delay to ensure main app has unregistered first
+      print('⏳ ASYNC: Waiting for main app to fully unregister...');
+      await Future.delayed(Duration(seconds: 5));
+      
+      // Double-check main app is not active
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final mainAppActive = prefs.getBool('main_app_is_active') ?? false;
+        
+        print('📊 ASYNC: Final check - Static active: $_isMainAppActive, Prefs active: $mainAppActive');
+        
+        if (_isMainAppActive || mainAppActive) {
+          print('⚠️ ASYNC: Main app became active during re-registration - aborting');
+          return;
+        }
+      } catch (e) {
+        print('❌ ASYNC: Error checking SharedPreferences: $e');
+        // Continue anyway if prefs fail
+      }
+      
+      print('🚀🚀 ASYNC: Starting background SIP connection 🚀🚀');
+      await _connectSipInBackground(_currentSipUser!);
+      print('✅✅ ASYNC: Background SIP helper re-registered successfully ✅✅');
+      
+    } catch (e) {
+      print('❌❌ ASYNC: Error re-registering background SIP helper: $e ❌❌');
+      print('❌ ASYNC: Error details: ${e.toString()}');
+      
+      // Schedule retry
+      Timer(Duration(seconds: 10), () {
+        if (!_isMainAppActive && _currentSipUser != null && _isServiceRunning) {
+          print('🔄 ASYNC: Retrying background SIP registration after error...');
+          _performBackgroundRegistration();
+        }
+      });
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static void _loadSipUserFromPreferences() async {
+    try {
+      print('📎 Loading SIP user from SharedPreferences...');
+      final prefs = await SharedPreferences.getInstance();
+      final savedUserJson = prefs.getString('websocket_sip_user');
+      
+      if (savedUserJson != null) {
+        _currentSipUser = SipUser.fromJsonString(savedUserJson);
+        print('✅ SIP user loaded from preferences: ${_currentSipUser!.authUser}');
+        
+        // Initialize background SIP helper if needed
+        if (_backgroundSipHelper == null) {
+          print('🔗 Initializing background SIP helper after loading user...');
+          _backgroundSipHelper = SIPUAHelper();
+          
+          // Only add listener if service instance exists
+          if (_serviceInstance != null) {
+            final listener = PersistentSipListener(_serviceInstance!);
+            _backgroundSipHelper!.addSipUaHelperListener(listener);
+            print('✅ Background SIP helper initialized with listener');
+          } else {
+            print('⚠️ Background SIP helper initialized but no service instance for listener');
+          }
+        }
+        
+        // Now try re-registration again
+        print('🔄 Retrying re-registration with loaded SIP user...');
+        _reregisterAfterMainAppBackground();
+      } else {
+        print('❌ No SIP user found in SharedPreferences');
+      }
+    } catch (e) {
+      print('❌ Error loading SIP user from preferences: $e');
+    }
+  }
 
   @pragma('vm:entry-point')
   static bool isMainAppActive() {
@@ -1106,6 +1836,100 @@ class PersistentBackgroundService {
       print('📞 Cleared forwarded call from memory and SharedPreferences');
     } catch (e) {
       print('❌ Error clearing forwarded call: $e');
+    }
+  }
+}
+
+/// iOS-specific fallback listener for direct SIP operation
+class IOSFallbackSipListener implements SipUaHelperListener {
+  IOSFallbackSipListener();
+
+  @override
+  void callStateChanged(Call call, CallState state) {
+    print('🍎🔔 iOS FALLBACK: Call state changed to ${state.state}');
+    print('🍎📞 iOS FALLBACK: Call from ${call.remote_identity}');
+    
+    switch (state.state) {
+      case CallStateEnum.CALL_INITIATION:
+        final caller = call.remote_identity ?? 'Unknown Number';
+        print('🍎🔔 iOS FALLBACK: Incoming call from $caller');
+        
+        // Store the incoming call reference
+        PersistentBackgroundService._currentIncomingCall = call;
+        
+        // Show local notification for iOS
+        PersistentBackgroundService.showIncomingCallNotification(
+          caller: caller,
+          callId: call.id ?? 'unknown',
+        );
+        break;
+        
+      case CallStateEnum.CONFIRMED:
+        print('🍎✅ iOS FALLBACK: Call connected');
+        if (PersistentBackgroundService._currentIncomingCall?.id == call.id) {
+          PersistentBackgroundService._currentActiveCall = call;
+          PersistentBackgroundService._currentIncomingCall = null;
+        }
+        break;
+        
+      case CallStateEnum.ENDED:
+      case CallStateEnum.FAILED:
+        print('🍎📞 iOS FALLBACK: Call ended/failed');
+        if (PersistentBackgroundService._currentIncomingCall?.id == call.id) {
+          PersistentBackgroundService._currentIncomingCall = null;
+        }
+        if (PersistentBackgroundService._currentActiveCall?.id == call.id) {
+          PersistentBackgroundService._currentActiveCall = null;
+        }
+        PersistentBackgroundService.hideIncomingCallNotification();
+        break;
+        
+      default:
+        print('🍎📞 iOS FALLBACK: Call state ${state.state}');
+        break;
+    }
+  }
+
+  @override
+  void registrationStateChanged(RegistrationState state) {
+    print('🍎📋 iOS FALLBACK: Registration state changed to ${state.state}');
+    
+    switch (state.state) {
+      case RegistrationStateEnum.REGISTERED:
+        print('🍎✅ iOS FALLBACK: Successfully registered to SIP server!');
+        break;
+      case RegistrationStateEnum.REGISTRATION_FAILED:
+        print('🍎❌ iOS FALLBACK: SIP registration failed');
+        break;
+      case RegistrationStateEnum.UNREGISTERED:
+        print('🍎⚠️ iOS FALLBACK: SIP unregistered');
+        break;
+      default:
+        print('🍎📋 iOS FALLBACK: Registration state ${state.state}');
+        break;
+    }
+  }
+
+  @override
+  void transportStateChanged(TransportState state) {
+    print('🍎🌐 iOS FALLBACK: Transport state changed to ${state.state}');
+  }
+
+  @override
+  void onNewMessage(SIPMessageRequest msg) {
+    print('🍎📨 iOS FALLBACK: New SIP message received');
+  }
+
+  @override
+  void onNewNotify(Notify ntf) {
+    print('🍎📢 iOS FALLBACK: New SIP notify received');
+  }
+
+  @override
+  void onNewReinvite(ReInvite event) {
+    print('🍎🔄 iOS FALLBACK: New SIP re-invite received');
+    if (event.reject != null) {
+      event.reject!.call({'status_code': 488}); // Not acceptable here
     }
   }
 }
