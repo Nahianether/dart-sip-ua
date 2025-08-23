@@ -21,9 +21,7 @@ import 'recent_calls.dart';
 import 'home_screen.dart';
 import 'vpn_config_screen.dart';
 import '../src/vpn_manager.dart';
-import 'battery_optimization_helper.dart';
 import 'websocket_connection_manager.dart';
-import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 

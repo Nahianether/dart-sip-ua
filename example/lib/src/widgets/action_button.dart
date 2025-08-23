@@ -11,7 +11,7 @@ class ActionButton extends StatefulWidget {
   final Function()? onLongPress;
 
   const ActionButton(
-      {Key? key,
+      {super.key,
       this.title,
       this.subTitle = '',
       this.icon,
@@ -19,8 +19,7 @@ class ActionButton extends StatefulWidget {
       this.onLongPress,
       this.checked = false,
       this.number = false,
-      this.fillColor})
-      : super(key: key);
+      this.fillColor});
 
   @override
   State<ActionButton> createState() => _ActionButtonState();

@@ -7,7 +7,7 @@ import 'dart:convert';
 class RecentCallsScreen extends StatefulWidget {
   final SIPUAHelper? helper;
   
-  const RecentCallsScreen({Key? key, this.helper}) : super(key: key);
+  const RecentCallsScreen({super.key, this.helper});
   
   @override
   State<RecentCallsScreen> createState() => _RecentCallsScreenState();

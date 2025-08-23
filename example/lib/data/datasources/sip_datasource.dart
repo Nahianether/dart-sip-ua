@@ -423,7 +423,7 @@ class SipUADataSource implements SipDataSource, SipUaHelperListener {
         startTime: callModel.startTime,
         endTime: DateTime.now(),
         duration: callModel.startTime != null 
-            ? DateTime.now().difference(callModel.startTime!) 
+            ? DateTime.now().difference(callModel.startTime) 
             : Duration.zero,
       );
       

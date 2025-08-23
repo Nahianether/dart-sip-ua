@@ -21,7 +21,7 @@ import 'persistent_background_service.dart';
 class DialPadWidget extends ConsumerStatefulWidget {
   final SIPUAHelper? _helper;
 
-  DialPadWidget(this._helper, {Key? key}) : super(key: key);
+  DialPadWidget(this._helper, {super.key});
 
   @override
   ConsumerState<DialPadWidget> createState() => _MyDialPadWidget();

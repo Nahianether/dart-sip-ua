@@ -8,9 +8,9 @@ class VPNStatusIndicator extends StatefulWidget {
   final WebSocketConnectionManager? connectionManager;
   
   const VPNStatusIndicator({
-    Key? key,
+    super.key,
     this.connectionManager,
-  }) : super(key: key);
+  });
 
   @override
   State<VPNStatusIndicator> createState() => _VPNStatusIndicatorState();

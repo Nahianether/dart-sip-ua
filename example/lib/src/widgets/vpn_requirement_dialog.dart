@@ -7,11 +7,11 @@ class VPNRequirementDialog extends StatelessWidget {
   final String message;
 
   const VPNRequirementDialog({
-    Key? key,
+    super.key,
     this.onConfigureVPN,
     this.onCancel,
     this.message = 'VPN connection is required to establish secure SIP connection.',
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

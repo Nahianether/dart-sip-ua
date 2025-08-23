@@ -9,7 +9,7 @@ import 'dart:io';
 class RegisterWidget extends ConsumerStatefulWidget {
   final SIPUAHelper? _helper;
 
-  RegisterWidget(this._helper, {Key? key}) : super(key: key);
+  RegisterWidget(this._helper, {super.key});
 
   @override
   ConsumerState<RegisterWidget> createState() => _MyRegisterWidget();

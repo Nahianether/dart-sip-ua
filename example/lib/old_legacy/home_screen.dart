@@ -8,7 +8,7 @@ import 'recent_calls.dart';
 class HomeScreen extends ConsumerStatefulWidget {
   final SIPUAHelper? helper;
 
-  const HomeScreen(this.helper, {Key? key}) : super(key: key);
+  const HomeScreen(this.helper, {super.key});
 
   @override
   ConsumerState<HomeScreen> createState() => _HomeScreenState();

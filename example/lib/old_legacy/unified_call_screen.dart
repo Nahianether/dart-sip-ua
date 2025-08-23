@@ -16,10 +16,10 @@ class UnifiedCallScreen extends StatefulWidget {
   final Call? call;
 
   const UnifiedCallScreen({
-    Key? key,
+    super.key,
     required this.helper,
     required this.call,
-  }) : super(key: key);
+  });
 
   @override
   State<UnifiedCallScreen> createState() => _UnifiedCallScreenState();
