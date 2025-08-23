@@ -47,10 +47,11 @@ final vpnStatusProvider = StateNotifierProvider<VPNStatusNotifier, VpnConnection
 
 class VPNStatusNotifier extends StateNotifier<VpnConnectionStatus> {
   final Ref ref;
-  late VPNManager _vpnManager;
+  // VPN functionality disabled for direct SIP connection
+  // late VPNManager _vpnManager;
 
   VPNStatusNotifier(this.ref) : super(VpnConnectionStatus.disconnected) {
-    _vpnManager = ref.read(vpnManagerProvider);
+    // _vpnManager = ref.read(vpnManagerProvider);
     _initializeVPN();
 
     // Force connected status after short delay for immediate UI feedback

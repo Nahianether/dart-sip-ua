@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../src/providers.dart';
 import '../src/vpn_manager.dart';
+import '../src/battery_optimization_helper.dart';
 import '../domain/entities/sip_account_entity.dart';
 import '../data/services/contacts_service.dart';
 import '../data/models/contact_model.dart';
@@ -152,13 +153,56 @@ class _ModernDialerScreenState extends ConsumerState<ModernDialerScreen>
         ),
         centerTitle: true,
         actions: [
-          IconButton(
-            icon: Icon(Icons.settings_outlined),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (context) => SettingsScreen()),
-              );
+          PopupMenuButton<String>(
+            onSelected: (value) async {
+              switch (value) {
+                case 'settings':
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (context) => SettingsScreen()),
+                  );
+                  break;
+                case 'battery':
+                  await BatteryOptimizationHelper.showBatteryOptimizationDialog(context);
+                  break;
+                case 'permissions':
+                  await BatteryOptimizationHelper.requestAllPermissions();
+                  break;
+              }
             },
+            itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+              PopupMenuItem<String>(
+                value: 'settings',
+                child: Row(
+                  children: [
+                    Icon(Icons.settings_outlined, size: 20),
+                    SizedBox(width: 12),
+                    Text('Settings'),
+                  ],
+                ),
+              ),
+              PopupMenuDivider(),
+              PopupMenuItem<String>(
+                value: 'battery',
+                child: Row(
+                  children: [
+                    Icon(Icons.battery_alert, size: 20, color: Colors.orange),
+                    SizedBox(width: 12),
+                    Text('Background Setup'),
+                  ],
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'permissions',
+                child: Row(
+                  children: [
+                    Icon(Icons.security, size: 20, color: Colors.blue),
+                    SizedBox(width: 12),
+                    Text('Request Permissions'),
+                  ],
+                ),
+              ),
+            ],
+            icon: Icon(Icons.more_vert),
           ),
         ],
         bottom: TabBar(

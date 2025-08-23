@@ -16,10 +16,26 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     
+    <!-- CRITICAL: Battery optimization and background running permissions -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
+    <uses-permission android:name="android.permission.TURN_SCREEN_ON" />
+    <uses-permission android:name="android.permission.SHOW_WHEN_LOCKED" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    
+    <!-- Android 12+ exact alarm permissions -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    
+    <!-- Background processing permissions -->
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_USE_DATA_IN_BACKGROUND" />
+    
     <!-- Boot and auto-start -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.QUICKBOOT_POWERON" />
+    <uses-permission android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+    <uses-permission android:name="android.permission.AUTO_START" />
     
     <!-- Phone integration -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
@@ -46,7 +62,11 @@
     <application
         android:label="dart_sip_ua_example"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:requestLegacyExternalStorage="true"
+        android:usesCleartextTraffic="true"
+        android:allowBackup="false"
+        android:supportsRtl="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -81,13 +101,19 @@
             android:foregroundServiceType="phoneCall"
             tools:replace="android:exported" />
             
-        <!-- Broadcast receiver for boot events -->
+        <!-- CRITICAL: Enhanced broadcast receiver for boot events and auto-start -->
         <receiver
             android:name="id.flutter.flutter_background_service.BootReceiver"
+            android:enabled="true"
             android:exported="false"
             tools:replace="android:exported">
-            <intent-filter>
+            <intent-filter android:priority="1000">
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.PACKAGE_REPLACED" />
+                <data android:scheme="package" />
             </intent-filter>
         </receiver>
         

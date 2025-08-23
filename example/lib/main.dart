@@ -11,8 +11,10 @@ import 'data/services/ringtone_vibration_service.dart';
 import 'data/services/connection_stability_service.dart';
 import 'data/services/hive_service.dart';
 import 'src/persistent_background_service.dart';
+import 'src/battery_optimization_helper.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import 'dart:async';
 
 void main() async {
@@ -24,7 +26,7 @@ void main() async {
   // Initialize Hive database
   await HiveService.initialize();
 
-  // Initialize SIP data source
+  // Initialize SIP data source (for UI communication only - no registration)
   await container.read(sipDataSourceProvider).initialize();
 
   // Initialize ringtone and vibration service
@@ -33,6 +35,13 @@ void main() async {
   // Initialize connection stability service
   final connectionStability = ConnectionStabilityService();
 
+  // CRITICAL: Initialize background permissions first
+  print('🔋 Initializing background permissions for reliable VoIP operation...');
+  final permissionsOk = await BatteryOptimizationHelper.initializeBackgroundPermissions();
+  if (!permissionsOk) {
+    print('⚠️ Some background permissions missing - app may not work reliably');
+  }
+  
   // Initialize and start background service for 24/7 SIP operation
   await PersistentBackgroundService.initializeService();
   await PersistentBackgroundService.startService();
@@ -71,6 +80,29 @@ class _VoIPAppState extends ConsumerState<VoIPApp> with WidgetsBindingObserver {
 
     // Start heartbeat since app is launching (initially active)
     _startHeartbeat();
+    
+    // CRITICAL: Check and prompt for background permissions
+    _checkBackgroundPermissions();
+  }
+  
+  void _checkBackgroundPermissions() async {
+    print('🔋 Checking background permissions on app start...');
+    
+    // Give the app a moment to fully initialize
+    await Future.delayed(Duration(seconds: 2));
+    
+    final permissionsOk = await BatteryOptimizationHelper.initializeBackgroundPermissions();
+    
+    if (!permissionsOk && mounted) {
+      print('⚠️ Background permissions missing - showing setup dialog');
+      // Show dialog after a short delay to ensure UI is ready
+      await Future.delayed(Duration(seconds: 1));
+      if (mounted) {
+        await BatteryOptimizationHelper.showBatteryOptimizationDialog(context);
+      }
+    } else {
+      print('✅ All background permissions are properly configured');
+    }
   }
 
   @override
@@ -91,12 +123,16 @@ class _VoIPAppState extends ConsumerState<VoIPApp> with WidgetsBindingObserver {
         _startHeartbeat();
         break;
       case AppLifecycleState.paused:
-        print('📱 App PAUSED - background service will handle SIP');
+        print('📱 App PAUSED - transferring SIP to background service');
+        // CRITICAL FIX: When paused (like in recent apps), background service should handle calls
         PersistentBackgroundService.setMainAppActive(false);
         _stopHeartbeat();
         break;
       case AppLifecycleState.inactive:
         print('📱 App INACTIVE - transitioning to background service');
+        // App is becoming inactive (could be temporary), transfer to background
+        PersistentBackgroundService.setMainAppActive(false);
+        _stopHeartbeat();
         break;
       case AppLifecycleState.detached:
         print('📱 App DETACHED - background service active');
@@ -104,16 +140,21 @@ class _VoIPAppState extends ConsumerState<VoIPApp> with WidgetsBindingObserver {
         _stopHeartbeat();
         break;
       case AppLifecycleState.hidden:
-        print('📱 App HIDDEN - background service handling calls');
-        PersistentBackgroundService.setMainAppActive(false);
+        print('📱 App HIDDEN - main app maintains SIP');
+        // CRITICAL FIX: Don't let background service take over
         _stopHeartbeat();
         break;
     }
   }
 
   void _setupIncomingCallChannel() {
+    // CRITICAL FIX: Enhanced platform channel handling
     const platform = MethodChannel('sip_phone/incoming_call');
     platform.setMethodCallHandler((call) async {
+      print('📞📞📞 PLATFORM CHANNEL CALL RECEIVED 📞📞📞');
+      print('📞 Method: ${call.method}');
+      print('📞 Arguments: ${call.arguments}');
+      
       if (call.method == 'handleIncomingCall') {
         final caller = call.arguments['caller'] as String? ?? 'Unknown';
         final callId = call.arguments['callId'] as String? ?? '';
@@ -125,31 +166,115 @@ class _VoIPAppState extends ConsumerState<VoIPApp> with WidgetsBindingObserver {
           // This is a call from the background service, navigate to call screen
           _navigateToIncomingCall(caller, callId);
         }
+      } else if (call.method == 'forceOpenAppForCall') {
+        final caller = call.arguments['caller'] as String? ?? 'Unknown';
+        final callId = call.arguments['callId'] as String? ?? '';
+        
+        print('🚀 FORCE OPEN APP for call from: $caller (ID: $callId)');
+        _navigateToIncomingCall(caller, callId);
       }
     });
+    
+    // CRITICAL FIX: Setup background service event listeners
+    _setupBackgroundServiceListeners();
+  }
+  
+  void _setupBackgroundServiceListeners() {
+    print('📱 Setting up background service event listeners...');
+    
+    final service = FlutterBackgroundService();
+    
+    service.on('incomingCall').listen((event) {
+      if (event != null) {
+        final data = event;
+        final caller = data['caller'] as String? ?? 'Unknown';
+        final callId = data['callId'] as String? ?? '';
+        
+        print('🔔 Background service: Incoming call from $caller (ID: $callId)');
+        _navigateToIncomingCall(caller, callId);
+      }
+    });
+    
+    service.on('callAccepted').listen((event) {
+      if (event != null) {
+        final data = event;
+        final caller = data['caller'] as String? ?? 'Unknown';
+        final callId = data['callId'] as String? ?? '';
+        
+        print('✅ Background service: Call accepted from $caller (ID: $callId)');
+        _navigateToActiveCall(caller, callId);
+      }
+    });
+    
+    service.on('callDeclined').listen((event) {
+      if (event != null) {
+        final data = event;
+        final caller = data['caller'] as String? ?? 'Unknown';
+        final callId = data['callId'] as String? ?? '';
+        
+        print('❌ Background service: Call declined from $caller (ID: $callId)');
+        // Navigate back to dialer
+        final context = navigatorKey.currentContext;
+        if (context != null) {
+          Navigator.of(context).popUntil((route) => route.isFirst);
+        }
+      }
+    });
+    
+    print('✅ Background service event listeners setup complete');
   }
 
   void _navigateToIncomingCall(String caller, String callId) {
-    // Navigate to call screen via the navigator
+    print('📞📞📞 NAVIGATING TO INCOMING CALL SCREEN 📞📞📞');
+    print('📞 Caller: $caller, CallID: $callId');
+    
     final context = navigatorKey.currentContext;
     if (context != null) {
-      // Check if we need to get the call from background service
-      final incomingCall = PersistentBackgroundService.getIncomingCall();
-      if (incomingCall != null) {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => ModernCallScreen(
-              call: CallEntity(
-                id: incomingCall.id ?? callId,
-                remoteIdentity: incomingCall.remote_identity ?? caller,
-                direction: CallDirection.incoming,
-                status: CallStatus.ringing,
-                startTime: DateTime.now(),
-              ),
-            ),
-          ),
-        );
-      }
+      // CRITICAL FIX: Always create call entity for incoming call UI
+      // The background service handles the actual SIP call object
+      final callEntity = CallEntity(
+        id: callId,
+        remoteIdentity: caller,
+        direction: CallDirection.incoming,
+        status: CallStatus.ringing,
+        startTime: DateTime.now(),
+      );
+      
+      print('📞 Created call entity for UI: ${callEntity.remoteIdentity}');
+      
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => ModernCallScreen(call: callEntity),
+          settings: RouteSettings(name: '/incoming-call'),
+        ),
+      );
+      
+      print('✅ Navigated to incoming call screen');
+    } else {
+      print('❌ No navigation context available!');
+    }
+  }
+  
+  void _navigateToActiveCall(String caller, String callId) {
+    print('📞 Navigating to active call screen for: $caller');
+    
+    final context = navigatorKey.currentContext;
+    if (context != null) {
+      // Create call entity for active call UI
+      final callEntity = CallEntity(
+        id: callId,
+        remoteIdentity: caller,
+        direction: CallDirection.incoming,
+        status: CallStatus.connected,
+        startTime: DateTime.now(),
+      );
+      
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => ModernCallScreen(call: callEntity),
+          settings: RouteSettings(name: '/active-call'),
+        ),
+      );
     }
   }
 

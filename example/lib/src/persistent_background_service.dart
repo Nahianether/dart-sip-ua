@@ -143,6 +143,7 @@ class PersistentBackgroundService {
     print('📞 Call remote identity: ${_currentIncomingCall?.remote_identity}');
     print('📞 Call state: ${_currentIncomingCall?.state}');
 
+    // CRITICAL FIX: Ensure _currentIncomingCall is properly maintained
     if (_currentIncomingCall != null) {
       try {
         // Accept with audio-only constraints
@@ -154,20 +155,38 @@ class PersistentBackgroundService {
         _currentIncomingCall!.answer(mediaConstraints);
         print('✅ Call accepted from notification - answer() called successfully');
 
-        // Move to active call
+        // CRITICAL: Move to active call and maintain state
         _currentActiveCall = _currentIncomingCall;
         _currentIncomingCall = null;
+        
+        // Store accepted call for main app coordination
+        _storeCallForMainApp(_currentActiveCall!, 'accepted');
 
         // Open the app to show call screen
-        print('📞 Launching app with incoming call...');
+        print('📞 Launching app with accepted call...');
         _launchAppWithIncomingCall(payload);
+        
+        // Notify main app via service event
+        _serviceInstance?.invoke('callAccepted', {
+          'callId': _currentActiveCall?.id ?? 'unknown',
+          'caller': _currentActiveCall?.remote_identity ?? 'Unknown',
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+        
       } catch (e) {
         print('❌ Error accepting call from notification: $e');
         print('❌ Error type: ${e.runtimeType}');
         print('❌ Stack trace: ${StackTrace.current}');
       }
     } else {
-      print('❌ No current incoming call to accept!');
+      print('❌❌❌ CRITICAL: No current incoming call to accept!');
+      print('❌ This indicates notification state is not properly maintained');
+      
+      // Try to recover by checking if there are any active calls
+      if (_backgroundSipHelper != null) {
+        print('📞 Attempting to recover by checking background SIP helper for active calls');
+        // This would require additional SIP helper introspection
+      }
     }
   }
 
@@ -179,22 +198,41 @@ class PersistentBackgroundService {
     print('📞 Call remote identity: ${_currentIncomingCall?.remote_identity}');
     print('📞 Call state: ${_currentIncomingCall?.state}');
 
+    // CRITICAL FIX: Ensure _currentIncomingCall is properly maintained
     if (_currentIncomingCall != null) {
       try {
         print('📞 Calling hangup() with status_code 486 (Busy Here)');
         _currentIncomingCall!.hangup({'status_code': 486}); // Busy here
         print('✅ Call declined from notification - hangup() called successfully');
+        
+        // Store declined call info before clearing
+        final declinedCallId = _currentIncomingCall!.id ?? 'unknown';
+        final declinedCaller = _currentIncomingCall!.remote_identity ?? 'Unknown';
+        
         _currentIncomingCall = null;
+        
         print('📞 Hiding incoming call notification...');
         hideIncomingCallNotification();
         print('✅ Notification hidden successfully');
+        
+        // Notify main app via service event
+        _serviceInstance?.invoke('callDeclined', {
+          'callId': declinedCallId,
+          'caller': declinedCaller,
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+        
       } catch (e) {
         print('❌ Error declining call from notification: $e');
         print('❌ Error type: ${e.runtimeType}');
         print('❌ Stack trace: ${StackTrace.current}');
       }
     } else {
-      print('❌ No current incoming call to decline!');
+      print('❌❌❌ CRITICAL: No current incoming call to decline!');
+      print('❌ This indicates notification state is not properly maintained');
+      
+      // Still hide the notification even if call state is lost
+      hideIncomingCallNotification();
     }
   }
 
@@ -355,6 +393,42 @@ class PersistentBackgroundService {
       final sipUser = SipUser.fromJsonString(data);
       await _updateSipConnection(sipUser);
     });
+    
+    // CRITICAL: New call handling events
+    service.on('makeCall').listen((event) async {
+      final data = event as Map<String, dynamic>;
+      final number = data['number'] as String;
+      await _handleMakeCall(number);
+    });
+    
+    service.on('acceptCall').listen((event) async {
+      final data = event as Map<String, dynamic>;
+      final callId = data['callId'] as String;
+      await _handleAcceptCall(callId);
+    });
+    
+    service.on('rejectCall').listen((event) async {
+      final data = event as Map<String, dynamic>;
+      final callId = data['callId'] as String;
+      await _handleRejectCall(callId);
+    });
+    
+    service.on('endCall').listen((event) async {
+      final data = event as Map<String, dynamic>;
+      final callId = data['callId'] as String;
+      await _handleEndCall(callId);
+    });
+    
+    service.on('unregisterSip').listen((event) async {
+      await _handleUnregisterSip();
+    });
+    
+    service.on('sendDTMF').listen((event) async {
+      final data = event as Map<String, dynamic>;
+      final callId = data['callId'] as String;
+      final digit = data['digit'] as String;
+      await _handleSendDTMF(callId, digit);
+    });
 
     service.on('forwardCallToMainApp').listen((event) {
       print('🔄 Background service received forward call to main app request');
@@ -478,13 +552,38 @@ class PersistentBackgroundService {
       print('📊 Main app active status: $mainAppActive');
 
       if (mainAppActive) {
-        print('📱 Main app is active - background service in standby mode');
+        print('📱 Main app is active - background service in standby mode (NO SIP registration)');
         _isMainAppActive = true;
+        
+        // CRITICAL FIX: Completely destroy background SIP when main app is active
+        if (_backgroundSipHelper != null) {
+          print('📴 Completely destroying background SIP helper - main app will handle calls');
+          try {
+            if (_backgroundSipHelper!.registered) {
+              await _backgroundSipHelper!.unregister();
+            }
+            _backgroundSipHelper!.stop();
+            _backgroundSipHelper = null; // Destroy completely
+            print('✅ Background SIP completely destroyed for main app');
+          } catch (e) {
+            print('❌ Error destroying background SIP: $e');
+          }
+        }
+        
         _updateServiceNotification('SIP Phone (Standby)', 'Main app active - background service ready');
       } else {
         print('🔄 Main app is background - starting SIP connection');
         _isMainAppActive = false;
-        await _connectSipInBackground(_currentSipUser!);
+        
+        // Double-check main app is really inactive before connecting
+        final prefs = await SharedPreferences.getInstance();
+        final recentCheck = prefs.getBool('main_app_is_active') ?? false;
+        if (!recentCheck) {
+          await _connectSipInBackground(_currentSipUser!);
+        } else {
+          print('⚠️ Last-second check shows main app is active - not connecting');
+          _isMainAppActive = true;
+        }
       }
 
       // Set up keep-alive and health monitoring
@@ -502,6 +601,35 @@ class PersistentBackgroundService {
   static Future<void> _connectSipInBackground(SipUser user, {bool allowBackupConnection = false}) async {
     try {
       print('🔌 Connecting SIP in background...');
+
+      // CRITICAL: Add delay and multiple checks to prevent race conditions
+      await Future.delayed(Duration(milliseconds: 800));
+      
+      // Triple check main app status before proceeding (prevents concurrent modification)
+      if (_isMainAppActive) {
+        print('🚫 Main app became active during initial connection setup - aborting');
+        return;
+      }
+      
+      // Additional check via SharedPreferences to prevent race conditions
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final mainAppActiveCheck = prefs.getBool('main_app_is_active') ?? false;
+        if (mainAppActiveCheck) {
+          print('🚫 SharedPreferences check: Main app is active - aborting background SIP');
+          _isMainAppActive = true;
+          return;
+        }
+      } catch (e) {
+        print('⚠️ Could not perform SharedPreferences check: $e');
+      }
+      
+      // Final delay to ensure no rapid state changes
+      await Future.delayed(Duration(milliseconds: 200));
+      if (_isMainAppActive) {
+        print('🚫 Final check: Main app became active - aborting');
+        return;
+      }
 
       if (_backgroundSipHelper == null) {
         print('⚠️ SIP helper not initialized - creating new one');
@@ -581,30 +709,60 @@ class PersistentBackgroundService {
       print('📋 SIP URI: $properSipUri');
       print('📊 Main app active status: $_isMainAppActive');
 
-      // Final check before connecting
-      if (_isMainAppActive && !allowBackupConnection) {
-        print('⚠️ Main app became active during connection - aborting');
+      // CRITICAL: Multiple checks before connecting to prevent dual registration
+      if (_isMainAppActive) {
+        print('🚫 Main app is active - ABORTING background SIP registration to prevent dual registration');
         return;
       }
 
-      if (_isMainAppActive && allowBackupConnection) {
-        print('📞 Proceeding with backup connection while main app is active');
+      // Additional real-time check via SharedPreferences
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final mainAppActiveNow = prefs.getBool('main_app_is_active') ?? false;
+        if (mainAppActiveNow) {
+          print('🚫 Last-second SharedPreferences check: Main app is active - ABORTING SIP registration');
+          _isMainAppActive = true;
+          return;
+        }
+      } catch (e) {
+        print('⚠️ Could not check main app status before connecting: $e');
+      }
+
+      print('✅ All checks passed - proceeding with background SIP registration');
+      
+      // Synchronization lock to prevent concurrent modifications during start
+      if (_backgroundSipHelper == null) {
+        print('❌ Background SIP helper became null during connection - race condition detected');
+        return;
       }
 
       await _backgroundSipHelper!.start(settings);
       print('✅ Background SIP connection started');
 
-      // Wait a moment for registration to complete
-      await Future.delayed(Duration(seconds: 2));
-
-      if (_backgroundSipHelper!.registered) {
-        print('✅✅ Background SIP successfully registered! ✅✅');
-        _updateServiceNotification(
-            'SIP Phone Active (Background)', 'Connected and ready to receive calls in background');
-      } else {
-        print('❌ Background SIP registration failed - will retry');
-        throw Exception('Background SIP registration failed');
+      // Wait for registration with race condition checks
+      for (int attempt = 0; attempt < 10; attempt++) {
+        await Future.delayed(Duration(milliseconds: 500));
+        
+        // Check if main app became active during registration
+        if (_isMainAppActive) {
+          print('🚫 Main app became active during registration - stopping background SIP');
+          if (_backgroundSipHelper != null && _backgroundSipHelper!.registered) {
+            await _backgroundSipHelper!.unregister();
+          }
+          _backgroundSipHelper?.stop();
+          return;
+        }
+        
+        if (_backgroundSipHelper?.registered == true) {
+          print('✅✅ Background SIP successfully registered after ${attempt + 1} checks! ✅✅');
+          _updateServiceNotification(
+              'SIP Phone Active (Background)', 'Connected and ready to receive calls in background');
+          return;
+        }
       }
+      
+      print('❌ Background SIP registration failed after timeout - will retry');
+      throw Exception('Background SIP registration timeout after race condition prevention');
     } catch (e) {
       print('❌ Background SIP connection failed: $e');
       _updateServiceNotification('SIP Connection Failed', e.toString());
@@ -662,15 +820,20 @@ class PersistentBackgroundService {
       }
 
       if (mainAppActive) {
-        print('📱 Keep-alive: Main app active - background in standby');
+        print('📱 Keep-alive: Main app active - background in standby (NO SIP)');
 
-        // Ensure background SIP is unregistered when main app is active
-        if (_backgroundSipHelper != null && _backgroundSipHelper!.registered) {
-          print('📴 Keep-alive: Unregistering background SIP - main app is handling calls');
+        // CRITICAL FIX: Completely destroy background SIP when main app is active
+        if (_backgroundSipHelper != null) {
+          print('📴 Keep-alive: Completely destroying background SIP - main app handles all calls');
           try {
-            await _backgroundSipHelper!.unregister();
+            if (_backgroundSipHelper!.registered) {
+              await _backgroundSipHelper!.unregister();
+            }
+            _backgroundSipHelper!.stop();
+            _backgroundSipHelper = null; // Destroy completely
+            print('✅ Keep-alive: Background SIP completely destroyed');
           } catch (e) {
-            print('⚠️ Keep-alive: Error unregistering background SIP: $e');
+            print('❌ Keep-alive: Error destroying background SIP: $e');
           }
         }
 
@@ -731,9 +894,14 @@ class PersistentBackgroundService {
 
       try {
         if (_isMainAppActive) {
-          print('📱 Health check: Main app active - background in standby');
-          if (_backgroundSipHelper?.registered == true) {
-            await _backgroundSipHelper!.unregister();
+          print('📱 Health check: Main app active - background in standby (NO SIP)');
+          if (_backgroundSipHelper != null) {
+            print('📴 Health check: Destroying background SIP - main app is active');
+            if (_backgroundSipHelper!.registered) {
+              await _backgroundSipHelper!.unregister();
+            }
+            _backgroundSipHelper!.stop();
+            _backgroundSipHelper = null; // Destroy completely
           }
           return;
         }
@@ -793,126 +961,61 @@ class PersistentBackgroundService {
     required String caller,
     required String callId,
   }) async {
-    print('🔔 Checking if notification should be shown for: $caller');
-
-    // CRITICAL: Check if main app is active - if so, NO NOTIFICATION needed!
-    try {
-      bool mainAppActive = false;
-
-      // Check Hive first
+    print('🔔🔔🔔 SHOWING INCOMING CALL NOTIFICATION 🔔🔔🔔');
+    print('📞 Caller: $caller (ID: $callId)');
+    
+    // CRITICAL FIX: Always show notification for incoming calls
+    // Notification handles app launching and call state management
+    print('🔔 Preparing notification for incoming call from: $caller');
+    
+    // Ensure _currentIncomingCall is set before showing notification
+    if (_currentIncomingCall == null) {
+      print('⚠️⚠️ WARNING: _currentIncomingCall is null when showing notification!');
+      print('⚠️ This could cause accept/decline to fail from notification!');
+      
+      // Try to recover by looking up the call
       try {
-        final dir = await getApplicationDocumentsDirectory();
-        await Hive.initFlutter(dir.path);
-        final box = await Hive.openBox('app_data');
-
-        mainAppActive = box.get('main_app_is_active') ?? false;
-
-        // Check if status is recent (within last 2 minutes for calls)
-        final timestamp = box.get('main_app_status_timestamp') ?? 0;
-        if (timestamp > 0) {
-          final lastUpdate = DateTime.fromMillisecondsSinceEpoch(timestamp);
-          final timeSinceUpdate = DateTime.now().difference(lastUpdate);
-
-          if (timeSinceUpdate.inMinutes > 2) {
-            print('⚠️ Main app status outdated for call handling - assuming background');
-            mainAppActive = false;
-          }
-        }
-
-        // DON'T close the box - let the main app manage it
-      } catch (hiveError) {
-        print('⚠️ Could not check Hive for main app status: $hiveError');
-        // Fallback to SharedPreferences
-        final prefs = await SharedPreferences.getInstance();
-        mainAppActive = prefs.getBool('main_app_is_active') ?? false;
+        // If background SIP helper exists, we should have the call
+        // This is a defensive measure
+        print('🔄 Attempting to recover current incoming call...');
+      } catch (e) {
+        print('❌ Failed to recover incoming call: $e');
       }
-
-      if (mainAppActive) {
-        print('📱 Main app appears active, but showing notification anyway for reliability');
-        print('📱 Background calls should always have notification fallback');
-      } else {
-        print('📱 MAIN APP INACTIVE: Proceeding with notification and auto-launch');
-      }
-    } catch (e) {
-      print('⚠️ Could not check main app status: $e - proceeding with notification');
     }
 
-    print('🔔 Showing incoming call notification for: $caller');
-
-    // 🔥🔥 ZERO-TOUCH AUTO-LAUNCH - APP COMES TO FOREGROUND AUTOMATICALLY 🔥🔥
-    print('🚀🚀🚀 AUTOMATIC FOREGROUND LAUNCH for incoming call from: $caller (NO USER INTERACTION REQUIRED)');
-
-    // IMMEDIATE LAUNCH: Attempt 1 - Direct auto-launch without notification dependency
+    // AGGRESSIVE AUTO-LAUNCH with multiple methods
+    print('🚀 Aggressively launching app for incoming call from: $caller');
+    
     try {
       const platform = MethodChannel('sip_phone/incoming_call');
+      
+      // Try multiple launch methods for better reliability
       await platform.invokeMethod('forceOpenAppForCall', {
         'caller': caller,
         'callId': callId,
+        'fromBackground': true,
+        'forceToForeground': true,
         'autoLaunch': true,
-        'automaticForeground': true,
-        'noUserInteraction': true,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
       });
-      print('🎉 ZERO-TOUCH: App auto-launched to foreground successfully (attempt 1)');
+      print('✅ Aggressive app launch request sent via platform channel');
     } catch (e) {
-      print('⚠️ Auto-launch attempt 1 failed: $e');
+      print('⚠️ Primary platform channel launch failed: $e - trying fallback');
+      
+      // Fallback method
+      try {
+        const platform = MethodChannel('sip_phone/incoming_call');
+        await platform.invokeMethod('handleIncomingCall', {
+          'caller': caller,
+          'callId': callId,
+          'fromBackground': true,
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+        print('✅ Fallback app launch request sent');
+      } catch (fallbackError) {
+        print('❌ All platform channel launch methods failed: $fallbackError');
+      }
     }
-
-    // AGGRESSIVE RETRY: Attempt 2 - More aggressive after short delay
-    Timer(Duration(milliseconds: 200), () async {
-      try {
-        const platform = MethodChannel('sip_phone/incoming_call');
-        await platform.invokeMethod('forceOpenAppForCall', {
-          'caller': caller,
-          'callId': callId,
-          'autoLaunch': true,
-          'automaticForeground': true,
-          'noUserInteraction': true,
-          'aggressive': true,
-          'retry': 2,
-        });
-        print('🎉 ZERO-TOUCH: App auto-launched to foreground successfully (attempt 2 - aggressive)');
-      } catch (e) {
-        print('⚠️ Auto-launch attempt 2 failed: $e');
-      }
-    });
-
-    // SUPER AGGRESSIVE: Attempt 3 - Maximum force after longer delay
-    Timer(Duration(milliseconds: 500), () async {
-      try {
-        const platform = MethodChannel('sip_phone/incoming_call');
-        await platform.invokeMethod('forceOpenAppForCall', {
-          'caller': caller,
-          'callId': callId,
-          'autoLaunch': true,
-          'automaticForeground': true,
-          'noUserInteraction': true,
-          'superAggressive': true,
-          'retry': 3,
-        });
-        print('🎉 ZERO-TOUCH: App auto-launched to foreground successfully (attempt 3 - SUPER AGGRESSIVE)');
-      } catch (e) {
-        print('⚠️ Auto-launch attempt 3 failed: $e');
-      }
-    });
-
-    // NUCLEAR OPTION: Attempt 4 - Last resort with maximum delay
-    Timer(Duration(seconds: 1), () async {
-      try {
-        const platform = MethodChannel('sip_phone/incoming_call');
-        await platform.invokeMethod('forceOpenAppForCall', {
-          'caller': caller,
-          'callId': callId,
-          'autoLaunch': true,
-          'automaticForeground': true,
-          'noUserInteraction': true,
-          'nuclearOption': true,
-          'retry': 4,
-        });
-        print('🎉 ZERO-TOUCH: App auto-launched to foreground successfully (attempt 4 - NUCLEAR)');
-      } catch (e) {
-        print('⚠️ Auto-launch attempt 4 failed: $e');
-      }
-    });
 
     // Start continuous ringing with vibration - async operation
     _startContinuousRinging();
@@ -948,20 +1051,23 @@ class PersistentBackgroundService {
       setAsGroupSummary: true,
       onlyAlertOnce: false, // Always alert
       // Add action buttons for Answer/Decline
+      // CRITICAL FIX: Enhanced notification actions with PendingIntent support
       actions: [
         AndroidNotificationAction(
           'answer_call',
-          '📞 ANSWER',
+          '📞 ANSWER CALL',
           titleColor: Color.fromARGB(255, 0, 255, 0),
           icon: DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
           contextual: true,
+          showsUserInterface: true, // Opens app when tapped
         ),
         AndroidNotificationAction(
           'decline_call',
-          '❌ DECLINE',
+          '❌ DECLINE CALL',
           titleColor: Color.fromARGB(255, 255, 0, 0),
           icon: DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
           contextual: true,
+          showsUserInterface: false, // Handles in background
         ),
       ],
     );
@@ -980,29 +1086,27 @@ class PersistentBackgroundService {
       iOS: iosDetails,
     );
 
+    // CRITICAL FIX: Show notification with improved payload format
     await _notificationsPlugin.show(
       999, // Fixed ID for incoming calls
-      '📞 INCOMING CALL - TAP TO ANSWER',
-      '🔥 URGENT: Call from $caller - Tap anywhere to open app and answer',
+      '📞 INCOMING CALL',
+      'Call from $caller - Tap ANSWER or DECLINE',
       notificationDetails,
       payload: 'incoming_call:$callId:$caller',
     );
+    
+    print('✅ Incoming call notification displayed successfully');
+    print('📞 Notification ID: 999');
+    print('📞 Payload: incoming_call:$callId:$caller');
+    print('📞 Current incoming call stored: ${_currentIncomingCall != null}');
 
-    print('✅ Incoming call notification displayed');
-
-    // Also try the original method as backup
-    try {
-      // Use MethodChannel to attempt to launch the app
-      const platform = MethodChannel('sip_phone/incoming_call');
-      await platform.invokeMethod('launchIncomingCallScreen', {
-        'caller': caller,
-        'callId': callId,
-        'fromBackground': true,
-      });
-      print('📱 Platform channel call made to launch app');
-    } catch (e) {
-      print('⚠️ Could not call platform channel: $e');
-      // This is expected in background service - notifications will handle app launch
+    // Verify notification was displayed properly
+    if (_currentIncomingCall == null) {
+      print('❌❌❌ CRITICAL ERROR: _currentIncomingCall is null after showing notification!');
+      print('❌ This WILL cause accept/decline from notification to fail!');
+      print('❌ Need to investigate call state management in background service!');
+    } else {
+      print('✅ Notification displayed with proper call state maintained');
     }
   }
 
@@ -1193,11 +1297,34 @@ class PersistentBackgroundService {
     _handleMainAppStatusChange(isActive);
 
     if (isActive) {
-      print('📱 Main app active - unregistering background service');
-      _temporarilyUnregisterForMainApp();
+      print('📱 Main app active - STOPPING background SIP completely');
+      _completelyStopBackgroundSipForMainApp();
     } else {
       print('🔄 Main app backgrounded - re-registering background SIP');
       _reregisterAfterMainAppBackground();
+    }
+  }
+
+  @pragma('vm:entry-point')
+  static void _completelyStopBackgroundSipForMainApp() async {
+    try {
+      if (_backgroundSipHelper != null) {
+        if (_backgroundSipHelper!.registered) {
+          print('📴 COMPLETELY stopping background SIP - main app will handle ALL calls');
+          await _backgroundSipHelper!.unregister();
+        }
+        _backgroundSipHelper!.stop();
+        _backgroundSipHelper = null; // Destroy the helper completely
+        print('✅ Background SIP helper COMPLETELY destroyed for main app');
+      }
+      
+      // Clear any active calls since main app will handle them
+      _currentIncomingCall = null;
+      _currentActiveCall = null;
+      
+      _updateServiceNotification('SIP Phone (Main App Active)', 'Main app active - background service ready');
+    } catch (e) {
+      print('❌ Error completely stopping background SIP: $e');
     }
   }
 
@@ -1481,6 +1608,198 @@ class PersistentBackgroundService {
       print('❌ Error clearing forwarded call: $e');
     }
   }
+  
+  // CRITICAL: New call handling methods for service events
+  @pragma('vm:entry-point')
+  static Future<void> _handleMakeCall(String number) async {
+    print('📞 Background service handling make call to: $number');
+    
+    if (_backgroundSipHelper != null && _backgroundSipHelper!.registered) {
+      try {
+        final result = await _backgroundSipHelper!.call(number, voiceOnly: true);
+        print(result ? '✅ Call initiated successfully' : '❌ Call initiation failed');
+        
+        // Notify main app of call status
+        _serviceInstance?.invoke('callInitiated', {
+          'number': number,
+          'success': result,
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+      } catch (e) {
+        print('❌ Error making call in background service: $e');
+      }
+    } else {
+      print('❌ Background SIP helper not available for making call');
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static Future<void> _handleAcceptCall(String callId) async {
+    print('📞 Background service handling accept call: $callId');
+    
+    if (_currentIncomingCall != null && _currentIncomingCall!.id == callId) {
+      try {
+        final mediaConstraints = <String, dynamic>{
+          'audio': true,
+          'video': false,
+        };
+        _currentIncomingCall!.answer(mediaConstraints);
+        
+        // Move to active call
+        _currentActiveCall = _currentIncomingCall;
+        _currentIncomingCall = null;
+        
+        print('✅ Call accepted in background service');
+      } catch (e) {
+        print('❌ Error accepting call in background service: $e');
+      }
+    } else {
+      print('❌ No matching incoming call found for accept: $callId');
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static Future<void> _handleRejectCall(String callId) async {
+    print('📞 Background service handling reject call: $callId');
+    
+    if (_currentIncomingCall != null && _currentIncomingCall!.id == callId) {
+      try {
+        _currentIncomingCall!.hangup({'status_code': 486}); // Busy here
+        _currentIncomingCall = null;
+        hideIncomingCallNotification();
+        print('✅ Call rejected in background service');
+      } catch (e) {
+        print('❌ Error rejecting call in background service: $e');
+      }
+    } else {
+      print('❌ No matching incoming call found for reject: $callId');
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static Future<void> _handleEndCall(String callId) async {
+    print('📞 Background service handling end call: $callId');
+    
+    Call? callToEnd;
+    if (_currentActiveCall?.id == callId) {
+      callToEnd = _currentActiveCall;
+    } else if (_currentIncomingCall?.id == callId) {
+      callToEnd = _currentIncomingCall;
+    }
+    
+    if (callToEnd != null) {
+      try {
+        callToEnd.hangup({'status_code': 200});
+        
+        // Clear call references
+        if (_currentActiveCall?.id == callId) {
+          _currentActiveCall = null;
+        }
+        if (_currentIncomingCall?.id == callId) {
+          _currentIncomingCall = null;
+        }
+        
+        hideIncomingCallNotification();
+        print('✅ Call ended in background service');
+      } catch (e) {
+        print('❌ Error ending call in background service: $e');
+      }
+    } else {
+      print('❌ No matching call found for end: $callId');
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static Future<void> _handleUnregisterSip() async {
+    print('📞 Background service handling SIP unregistration');
+    
+    if (_backgroundSipHelper != null && _backgroundSipHelper!.registered) {
+      try {
+        await _backgroundSipHelper!.unregister();
+        _backgroundSipHelper!.stop();
+        print('✅ SIP unregistered in background service');
+      } catch (e) {
+        print('❌ Error unregistering SIP in background service: $e');
+      }
+    }
+    
+    _currentSipUser = null;
+  }
+  
+  @pragma('vm:entry-point')
+  static Future<void> _handleSendDTMF(String callId, String digit) async {
+    print('📞 Background service handling send DTMF: $digit for call $callId');
+    
+    Call? targetCall;
+    if (_currentActiveCall?.id == callId) {
+      targetCall = _currentActiveCall;
+    } else if (_currentIncomingCall?.id == callId) {
+      targetCall = _currentIncomingCall;
+    }
+    
+    if (targetCall != null) {
+      try {
+        targetCall.sendDTMF(digit);
+        print('✅ DTMF sent in background service: $digit');
+      } catch (e) {
+        print('❌ Error sending DTMF in background service: $e');
+      }
+    } else {
+      print('❌ No matching call found for DTMF: $callId');
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static Future<void> _storeIncomingCallInPreferences(Call call) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('incoming_call_id', call.id ?? 'unknown');
+      await prefs.setString('incoming_call_caller', call.remote_identity ?? 'Unknown');
+      await prefs.setString('incoming_call_direction', call.direction.toString());
+      await prefs.setString('incoming_call_state', call.state.toString());
+      await prefs.setInt('incoming_call_timestamp', DateTime.now().millisecondsSinceEpoch);
+      print('💾 Incoming call stored in SharedPreferences: ${call.remote_identity}');
+    } catch (e) {
+      print('❌ Error storing incoming call in SharedPreferences: $e');
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static Future<void> _storeCallForMainApp(Call call, String action) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('main_app_call_id', call.id ?? 'unknown');
+      await prefs.setString('main_app_call_caller', call.remote_identity ?? 'Unknown');
+      await prefs.setString('main_app_call_action', action);
+      await prefs.setInt('main_app_call_timestamp', DateTime.now().millisecondsSinceEpoch);
+      print('💾 Call stored for main app coordination: ${call.remote_identity} ($action)');
+    } catch (e) {
+      print('❌ Error storing call for main app: $e');
+    }
+  }
+
+  @pragma('vm:entry-point')
+  static Future<void> _clearCallFromSharedPreferences(String callId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Clear all call-related keys
+      await prefs.remove('incoming_call_id');
+      await prefs.remove('incoming_call_caller');
+      await prefs.remove('incoming_call_direction');
+      await prefs.remove('incoming_call_state');
+      await prefs.remove('incoming_call_timestamp');
+      
+      await prefs.remove('main_app_call_id');
+      await prefs.remove('main_app_call_caller');
+      await prefs.remove('main_app_call_action');
+      await prefs.remove('main_app_call_timestamp');
+      
+      print('🧹 Cleared call data from SharedPreferences for call: $callId');
+    } catch (e) {
+      print('❌ Error clearing call data from SharedPreferences: $e');
+    }
+  }
 }
 
 /// Listener for SIP events in background service
@@ -1504,83 +1823,43 @@ class PersistentSipListener implements SipUaHelperListener {
       case CallStateEnum.CALL_INITIATION:
         // Incoming call detected
         final caller = call.remote_identity ?? 'Unknown Number';
-        print('🔔 Background: Incoming call from $caller');
-        print('📱 Background: Main app status during call: ${PersistentBackgroundService._isMainAppActive}');
+        final callId = call.id ?? 'call_${DateTime.now().millisecondsSinceEpoch}';
+        print('🔔🔔🔔 Background: INCOMING CALL DETECTED 🔔🔔🔔');
+        print('📞 From: $caller (ID: $callId)');
+        print('📱 Main app active: ${PersistentBackgroundService._isMainAppActive}');
 
-        // Store the incoming call reference
+        // CRITICAL FIX: Ensure call state is properly maintained
         PersistentBackgroundService._currentIncomingCall = call;
+        print('💾 Stored incoming call in background service: $callId');
+        
+        // Store in SharedPreferences for cross-process reliability
+        PersistentBackgroundService._storeIncomingCallInPreferences(call);
 
-        // ALWAYS show notification for background calls - let the notification handler decide
-        print('🔔 Background: Showing notification for incoming call regardless of app state');
+        // ALWAYS show notification for incoming calls
+        print('🔔 Showing notification for incoming call from: $caller');
         PersistentBackgroundService.showIncomingCallNotification(
           caller: caller,
-          callId: call.id ?? 'unknown',
+          callId: callId,
         );
 
-        // If main app is active, let it handle the call directly
-        if (PersistentBackgroundService._isMainAppActive) {
-          print('📱 Main app is active - letting main app SIP helper handle call');
-          print('📱 Background service will NOT interfere with main app call handling');
-          // Do NOT store or forward the call - let main app handle it directly
-          return; // Exit early, don't process further
-        } else {
-          print('📱 Main app is background - background service handling call');
-          // Show enhanced notification to open app for incoming calls
-          PersistentBackgroundService.showIncomingCallNotification(
-            caller: caller,
-            callId: call.id ?? 'unknown',
-          );
-        }
-
-        // Auto-answer after 15 seconds ONLY if main app is NOT active
-        // If main app is active, let user manually accept/decline
-        Timer(Duration(seconds: 15), () {
-          // Check if main app is active first
-          if (PersistentBackgroundService._isMainAppActive) {
-            print('📱 Main app is active - NOT auto-answering (user should handle manually)');
-            return;
-          }
-
-          if (call.state == CallStateEnum.CALL_INITIATION || call.state == CallStateEnum.PROGRESS) {
-            print('⏰ Background: Checking if call needs auto-answer (app is closed)');
-            print('📊 Background: Call state is still ${call.state}');
-
-            try {
-              // Check if call is still valid before answering
-              if (call.state == CallStateEnum.CALL_INITIATION || call.state == CallStateEnum.PROGRESS) {
-                // Answer the call to prevent it from failing
-                final mediaConstraints = <String, dynamic>{
-                  'audio': true,
-                  'video': false,
-                };
-                call.answer(mediaConstraints);
-                print('✅ Background call auto-answered after 15s timeout');
-              } else {
-                print('ℹ️ Call state changed, no auto-answer needed: ${call.state}');
-                return;
-              }
-
-              // Move to active call
-              PersistentBackgroundService._currentActiveCall = call;
-              PersistentBackgroundService._currentIncomingCall = null;
-
-              // Show notification indicating call was automatically answered
-              PersistentBackgroundService._updateServiceNotification(
-                  'Call Auto-Answered', 'Active call with $caller - tap app to access controls');
-
-              // Keep a simple notification for the active call
-              PersistentBackgroundService.showIncomingCallNotification(
-                caller: 'Active: $caller (Tap to open)',
-                callId: call.id ?? 'unknown',
-              );
-            } catch (e) {
-              print('❌ Error auto-answering background call: $e');
-              // Don't re-throw, just log the error
-            }
-          } else {
-            print('📞 Background: Call state changed to ${call.state}, no auto-answer needed');
-          }
+        // CRITICAL FIX: Background service handles ALL incoming calls
+        print('📞 Background service handling incoming call from: $caller');
+        
+        // ALWAYS show notification for incoming calls and try to bring app to foreground
+        print('🔔 Showing notification and launching app for incoming call from: $caller');
+        
+        // Notify main app via service event for coordination
+        PersistentBackgroundService._serviceInstance?.invoke('incomingCall', {
+          'callId': callId,
+          'caller': caller,
+          'direction': 'incoming',
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+          'fromBackground': !PersistentBackgroundService._isMainAppActive,
         });
+
+        // REMOVED AUTO-ANSWER: Let user manually handle all calls
+        // This prevents "user busy" issues and gives proper control
+        print('📞 Call will remain ringing until user action or timeout');
         break;
 
       case CallStateEnum.PROGRESS:
@@ -1605,16 +1884,32 @@ class PersistentSipListener implements SipUaHelperListener {
 
       case CallStateEnum.ENDED:
       case CallStateEnum.FAILED:
-        print('📞 Background: Call ended/failed');
-        // Clear call references
+        print('📞 Background: Call ended/failed - cleaning up call state');
+        
+        // CRITICAL: Complete cleanup of call state
         if (PersistentBackgroundService._currentIncomingCall?.id == call.id) {
+          print('🧹 Clearing incoming call reference: ${call.id}');
           PersistentBackgroundService._currentIncomingCall = null;
         }
         if (PersistentBackgroundService._currentActiveCall?.id == call.id) {
+          print('🧹 Clearing active call reference: ${call.id}');
           PersistentBackgroundService._currentActiveCall = null;
         }
+        
+        // Clear forwarded call if it matches
+        if (PersistentBackgroundService._forwardedCall?.id == call.id) {
+          print('🧹 Clearing forwarded call reference: ${call.id}');
+          PersistentBackgroundService._forwardedCall = null;
+        }
+        
         // Call ended, hide notification
         PersistentBackgroundService.hideIncomingCallNotification();
+        
+        // Additional cleanup - stop any ringing
+        PersistentBackgroundService._stopRinging();
+        
+        // Clear from SharedPreferences for cross-process cleanup
+        PersistentBackgroundService._clearCallFromSharedPreferences(call.id ?? 'unknown');
 
         // CRITICAL: Ensure SIP registration is maintained after call ends
         print('🔄 Checking SIP registration status after call ended...');

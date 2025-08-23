@@ -5,7 +5,9 @@ import '../models/call_model.dart';
 import '../../domain/entities/call_entity.dart';
 import '../../domain/entities/sip_account_entity.dart';
 import '../services/ringtone_vibration_service.dart';
-import '../services/call_log_service.dart';
+// import '../services/call_log_service.dart'; // Call logging handled by background service
+import '../../src/persistent_background_service.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 
 abstract class SipDataSource {
   Future<void> initialize();
@@ -33,7 +35,8 @@ class SipUADataSource implements SipDataSource, SipUaHelperListener {
   late SIPUAHelper _sipHelper;
   SipAccountModel? _currentAccount;
   ConnectionStatus _currentStatus = ConnectionStatus.disconnected;
-  final CallLogService _callLogService = CallLogService();
+  // Call logging now handled by background service
+  // final CallLogService _callLogService = CallLogService();
   
   final StreamController<ConnectionStatus> _connectionStatusController = 
       StreamController<ConnectionStatus>.broadcast();
@@ -42,8 +45,8 @@ class SipUADataSource implements SipDataSource, SipUaHelperListener {
   final StreamController<CallModel> _activeCallsController = 
       StreamController<CallModel>.broadcast();
 
-  // Track call states for logging
-  final Map<String, CallModel> _callHistory = {};
+  // Track call states for logging (managed by background service)
+  // final Map<String, CallModel> _callHistory = {};
 
   @override
   Future<void> initialize() async {
@@ -53,44 +56,139 @@ class SipUADataSource implements SipDataSource, SipUaHelperListener {
 
   @override
   Future<void> registerAccount(SipAccountModel account) async {
-    _currentAccount = account;
+    print('🔄 SipDataSource: Main app registering SIP directly');
     
-    final settings = UaSettings();
-    settings.transportType = TransportType.WS;
-    settings.webSocketUrl = account.wsUrl;
-    settings.webSocketSettings.extraHeaders = account.extraHeaders ?? {};
-    settings.webSocketSettings.allowBadCertificate = true;
-    
-    settings.uri = account.sipUri;
-    settings.registrarServer = account.domain;
-    settings.authorizationUser = account.username;
-    settings.password = account.password;
-    settings.displayName = account.displayName ?? account.username;
-    settings.userAgent = 'Android SIP Client';
-    settings.dtmfMode = DtmfMode.RFC2833;
-    settings.register = true;
-    settings.register_expires = 600;
-    settings.contact_uri = 'sip:${account.username}@${account.domain};transport=ws';
-    settings.sessionTimers = true;
-    
-    // Set host from WebSocket URL
-    try {
-      final wsUri = Uri.parse(account.wsUrl);
-      settings.host = wsUri.host.isNotEmpty ? wsUri.host : account.domain;
-    } catch (e) {
-      settings.host = account.domain;
+    // Validate account data first
+    if (account.wsUrl.isEmpty || account.username.isEmpty || account.password.isEmpty) {
+      _currentStatus = ConnectionStatus.failed;
+      _connectionStatusController.add(_currentStatus);
+      throw Exception('Invalid account configuration: missing required fields');
     }
     
-    await _sipHelper.start(settings);
+    _currentAccount = account;
+    _currentStatus = ConnectionStatus.connecting;
+    _connectionStatusController.add(_currentStatus);
+    
+    // CRITICAL FIX: Main app handles SIP directly, no background service conflict
+    // Disable background service SIP when main app is active
+    PersistentBackgroundService.setMainAppActive(true);
+    
+    try {
+      // SIP helper should be initialized in initialize() method
+      // No need to check for null as it's initialized as late
+
+      // Stop any existing registration first
+      if (_sipHelper.registered) {
+        print('🔄 Stopping existing SIP registration');
+        await _sipHelper.unregister();
+        _sipHelper.stop();
+        await Future.delayed(Duration(seconds: 1)); // Give time for cleanup
+      }
+
+      final settings = UaSettings();
+      settings.transportType = TransportType.WS;
+      settings.webSocketUrl = account.wsUrl;
+      settings.webSocketSettings.extraHeaders = account.extraHeaders ?? {};
+      settings.webSocketSettings.allowBadCertificate = true;
+      
+      settings.uri = account.sipUri;
+      settings.registrarServer = account.domain;
+      settings.authorizationUser = account.username;
+      settings.password = account.password;
+      settings.displayName = account.displayName ?? account.username;
+      settings.userAgent = 'Android SIP Client';
+      settings.dtmfMode = DtmfMode.RFC2833;
+      settings.register = true;
+      settings.register_expires = 600;
+      settings.contact_uri = 'sip:${account.username}@${account.domain};transport=ws';
+      settings.sessionTimers = true;
+      
+      // Set host from WebSocket URL with error handling
+      try {
+        final wsUri = Uri.parse(account.wsUrl);
+        if (wsUri.host.isEmpty) {
+          throw Exception('Invalid WebSocket URL: empty host');
+        }
+        settings.host = wsUri.host;
+        print('✅ Parsed host from WebSocket URL: ${settings.host}');
+      } catch (e) {
+        print('⚠️ Error parsing WebSocket URL: $e - falling back to domain');
+        if (account.domain.isEmpty) {
+          _currentStatus = ConnectionStatus.failed;
+          _connectionStatusController.add(_currentStatus);
+          throw Exception('Invalid configuration: both WebSocket URL and domain are invalid');
+        }
+        settings.host = account.domain;
+      }
+      
+      print('🔄 Starting SIP registration with settings:');
+      print('  - URI: ${settings.uri}');
+      print('  - Host: ${settings.host}');
+      print('  - WebSocket: ${settings.webSocketUrl}');
+      print('  - Username: ${settings.authorizationUser}');
+      
+      // Add timeout to prevent hanging
+      await _sipHelper.start(settings).timeout(
+        Duration(seconds: 30),
+        onTimeout: () {
+          print('❌ SIP registration timeout after 30 seconds');
+          _currentStatus = ConnectionStatus.failed;
+          _connectionStatusController.add(_currentStatus);
+          throw TimeoutException('SIP registration timeout');
+        },
+      );
+      print('✅ SIP registration started successfully');
+      
+    } catch (e) {
+      print('❌ Error in main app SIP registration: $e');
+      _currentStatus = ConnectionStatus.failed;
+      _connectionStatusController.add(_currentStatus);
+      
+      // Cleanup on failure to prevent inconsistent state
+      try {
+        if (_sipHelper.registered) {
+          await _sipHelper.unregister();
+        }
+        _sipHelper.stop();
+        _currentAccount = null;
+        print('🧹 Cleaned up SIP helper after registration failure');
+      } catch (cleanupError) {
+        print('⚠️ Error during cleanup after registration failure: $cleanupError');
+      }
+      
+      rethrow;
+    }
   }
+  
 
   @override
   Future<void> unregisterAccount() async {
-    if (_sipHelper.registered) {
-      await _sipHelper.unregister();
+    print('🔄 SipDataSource: Main app unregistering SIP directly');
+    
+    try {
+      // Stop SIP helper in main app
+      if (_sipHelper.registered) {
+        await _sipHelper.unregister();
+        print('🔄 SIP unregistered from server');
+      }
+      _sipHelper.stop();
+      print('🔄 SIP helper stopped');
+      
+      // Update local state
+      _currentAccount = null;
+      _currentStatus = ConnectionStatus.disconnected;
+      _connectionStatusController.add(_currentStatus);
+      
+      // Allow background service to take over when app goes to background
+      PersistentBackgroundService.setMainAppActive(false);
+      
+      print('✅ Main app SIP unregistration complete');
+      
+    } catch (e) {
+      print('❌ Error in main app SIP unregistration: $e');
+      _currentStatus = ConnectionStatus.failed;
+      _connectionStatusController.add(_currentStatus);
     }
-    _sipHelper.stop();
-    _currentAccount = null;
   }
 
   @override
@@ -111,40 +209,26 @@ class SipUADataSource implements SipDataSource, SipUaHelperListener {
   @override
   Future<CallModel> makeCall(String number) async {
     try {
-      print('📞 Making call to: $number');
-      final result = await _sipHelper.call(number, voiceOnly: true);
+      print('📞 Making call via background service to: $number');
       
-      // Wait a bit for the call to be registered in callStateChanged
-      await Future.delayed(Duration(milliseconds: 500));
+      // CRITICAL FIX: Delegate to background service
+      final service = FlutterBackgroundService();
+      service.invoke('makeCall', {'number': number});
       
-      // Get the actual call from the SIP helper - find most recent outgoing call
-      Call? actualCall;
-      String? callId;
+      // Generate call ID for UI tracking
+      final callId = 'outgoing_${DateTime.now().millisecondsSinceEpoch}';
       
-      for (final entry in _activeCalls.entries) {
-        final call = entry.value;
-        if (call.direction == Direction.outgoing && 
-            call.remote_identity?.contains(number) == true) {
-          actualCall = call;
-          callId = entry.key;
-          break;
-        }
-      }
-      
-      // Fallback ID if not found
-      callId ??= 'outgoing_${DateTime.now().millisecondsSinceEpoch}';
-      
-      print('📞 Call initiated with ID: $callId');
+      print('📞 Call request sent to background service with ID: $callId');
       
       return CallModel(
         id: callId,
         remoteIdentity: number,
         direction: CallDirection.outgoing,
-        status: result ? CallStatus.connecting : CallStatus.failed,
+        status: CallStatus.connecting,
         startTime: DateTime.now(),
       );
     } catch (e) {
-      print('❌ Error making call: $e');
+      print('❌ Error requesting call via background service: $e');
       return CallModel(
         id: 'failed_${DateTime.now().millisecondsSinceEpoch}',
         remoteIdentity: number,
@@ -160,88 +244,51 @@ class SipUADataSource implements SipDataSource, SipUaHelperListener {
 
   @override
   Future<void> acceptCall(String callId) async {
-    final call = _activeCalls[callId];
-    if (call != null) {
-      // Stop vibration when call is answered
-      await RingtoneVibrationService().stopRinging();
-      call.answer({'audio': true, 'video': false});
-    }
+    print('📞 Accepting call via background service: $callId');
+    
+    // Stop vibration when call is answered
+    await RingtoneVibrationService().stopRinging();
+    
+    // CRITICAL FIX: Delegate to background service
+    final service = FlutterBackgroundService();
+    service.invoke('acceptCall', {'callId': callId});
+    
+    print('✅ Call accept request sent to background service');
   }
 
   @override
   Future<void> rejectCall(String callId) async {
-    final call = _activeCalls[callId];
-    if (call != null) {
-      // Stop vibration when call is rejected
-      await RingtoneVibrationService().stopRinging();
-      call.hangup({'status_code': 486}); // Busy here
-    }
+    print('📞 Rejecting call via background service: $callId');
+    
+    // Stop vibration when call is rejected
+    await RingtoneVibrationService().stopRinging();
+    
+    // CRITICAL FIX: Delegate to background service
+    final service = FlutterBackgroundService();
+    service.invoke('rejectCall', {'callId': callId});
+    
+    print('✅ Call reject request sent to background service');
   }
 
   @override
   Future<void> endCall(String callId) async {
     try {
-      print('🔄 EndCall requested for ID: $callId');
+      print('🔄 EndCall requested via background service for ID: $callId');
       
       // Stop vibration when call is ended
       await RingtoneVibrationService().stopRinging();
       
-      final call = _activeCalls[callId];
-      if (call != null) {
-        print('🔄 Found call, hanging up: $callId');
-        call.hangup({'status_code': 200});
-        
-        // Wait a moment for the hangup to process
-        await Future.delayed(Duration(milliseconds: 100));
-        
-        _activeCalls.remove(callId);
-        print('✅ Call hung up and removed from active calls');
-      } else {
-        // If specific call not found, be more aggressive
-        print('⚠️ Call ID $callId not found in active calls (${_activeCalls.keys.toList()})');
-        
-        // Try to hangup all active calls
-        for (final entry in _activeCalls.entries) {
-          try {
-            print('🔄 Hanging up active call: ${entry.key}');
-            entry.value.hangup({'status_code': 200});
-          } catch (e) {
-            print('❌ Error hanging up call ${entry.key}: $e');
-          }
-        }
-        
-        // Also terminate all sessions on the SIP helper
-        _sipHelper.terminateSessions({'status_code': 200});
-        _activeCalls.clear();
-        print('🔄 Terminated all active sessions and calls');
-      }
+      // CRITICAL FIX: Delegate to background service
+      final service = FlutterBackgroundService();
+      service.invoke('endCall', {'callId': callId});
       
-      // Additional cleanup: force terminate all sessions
-      try {
-        _sipHelper.terminateSessions({'status_code': 200});
-        print('🔄 Force terminated all sessions via SIP helper');
-      } catch (e) {
-        print('ℹ️ SIP helper terminate sessions failed: $e');
-      }
+      // Clear local tracking
+      _activeCalls.clear();
       
-      // Final check: ensure no active calls remain
-      if (_activeCalls.isNotEmpty) {
-        print('⚠️ Warning: Active calls still remain after endCall: ${_activeCalls.keys.toList()}');
-      }
-      
-      print('✅ EndCall completed for $callId');
+      print('✅ EndCall request sent to background service for $callId');
       
     } catch (e) {
-      print('❌ Error ending call: $e');
-      
-      // Ultimate fallback: force terminate everything
-      try {
-        _sipHelper.terminateSessions({'status_code': 200});
-        _activeCalls.clear();
-        print('🔄 Ultimate fallback: force terminated everything');
-      } catch (fallbackError) {
-        print('❌ Ultimate fallback failed: $fallbackError');
-      }
+      print('❌ Error requesting call end via background service: $e');
     }
   }
 
@@ -269,10 +316,11 @@ class SipUADataSource implements SipDataSource, SipUaHelperListener {
 
   @override
   Future<void> sendDTMF(String callId, String digit) async {
-    final call = _activeCalls[callId];
-    if (call != null) {
-      call.sendDTMF(digit);
-    }
+    print('📞 Sending DTMF via background service: $digit');
+    
+    // CRITICAL FIX: Delegate to background service
+    final service = FlutterBackgroundService();
+    service.invoke('sendDTMF', {'callId': callId, 'digit': digit});
   }
 
   @override
@@ -281,39 +329,79 @@ class SipUADataSource implements SipDataSource, SipUaHelperListener {
     
     print('📞 Call state changed: ID=$callId, State=${state.state}, Direction=${call.direction}');
     
-    // Store/update active call with the actual SIP call ID
-    _activeCalls[callId] = call;
-    
-    final callModel = _mapSipCallToCallModel(call, state, callId);
-    
-    // Store call in history for logging
-    _callHistory[callId] = callModel;
-    
-    if (call.direction == Direction.incoming && 
-        state.state == CallStateEnum.CALL_INITIATION) {
-      print('📞 Incoming call received: $callId');
-      _incomingCallsController.add(callModel);
-    } else {
-      _activeCallsController.add(callModel);
+    // Store/update active call with null safety
+    if (call.id != null) {
+      _activeCalls[callId] = call;
     }
     
-    // Clean up and log call when ended
-    if (state.state == CallStateEnum.ENDED) {
-      print('📞 Call ended in callStateChanged: $callId');
-      _activeCalls.remove(callId);
+    try {
+      final callModel = _mapSipCallToCallModel(call, state, callId);
       
-      // Log the call if it ended
-      final finalCallModel = _callHistory[callId];
-      if (finalCallModel != null) {
-        _logCallFromModel(finalCallModel, state);
-        _callHistory.remove(callId);
+      if (call.direction == Direction.incoming && 
+          state.state == CallStateEnum.CALL_INITIATION) {
+        print('📞 Incoming call received: $callId');
+        _incomingCallsController.add(callModel);
+      } else {
+        _activeCallsController.add(callModel);
       }
+      
+      // Clean up when call ends or fails
+      if (state.state == CallStateEnum.ENDED || state.state == CallStateEnum.FAILED) {
+        print('📞 Call ${state.state == CallStateEnum.ENDED ? "ended" : "failed"}: $callId - performing cleanup');
+        _activeCalls.remove(callId);
+        
+        // Additional cleanup for failed calls
+        if (state.state == CallStateEnum.FAILED) {
+          print('📞 Call failed cleanup: removing any lingering call references');
+          // Stop any ringtone/vibration
+          RingtoneVibrationService().stopRinging().catchError((e) {
+            print('⚠️ Error stopping ringtone/vibration during cleanup: $e');
+          });
+        }
+      }
+      
+    } catch (e) {
+      print('❌ Error handling call state change: $e');
     }
+  }
+  
+  // Restore call mapping method with null safety
+  CallModel _mapSipCallToCallModel(Call call, CallState state, String callId) {
+    CallStatus status;
+    switch (state.state) {
+      case CallStateEnum.STREAM:
+        status = CallStatus.connected;
+        break;
+      case CallStateEnum.ENDED:
+        status = CallStatus.ended;
+        break;
+      case CallStateEnum.FAILED:
+        status = CallStatus.failed;
+        break;
+      case CallStateEnum.CALL_INITIATION:
+        status = call.direction == Direction.incoming 
+            ? CallStatus.ringing 
+            : CallStatus.connecting;
+        break;
+      default:
+        status = CallStatus.connecting;
+        break;
+    }
+
+    return CallModel(
+      id: callId,
+      remoteIdentity: call.remote_identity ?? 'Unknown',
+      direction: call.direction == Direction.incoming 
+          ? CallDirection.incoming 
+          : CallDirection.outgoing,
+      status: status,
+      startTime: DateTime.now(),
+    );
   }
 
   @override
   void registrationStateChanged(RegistrationState state) {
-    print('📊 SIP Registration state changed: ${state.state}');
+      print('📊 SIP Registration state changed: ${state.state}');
     
     ConnectionStatus status;
     switch (state.state) {
@@ -370,38 +458,8 @@ class SipUADataSource implements SipDataSource, SipUaHelperListener {
     _connectionStatusController.add(status);
   }
 
-  CallModel _mapSipCallToCallModel(Call call, CallState state, String callId) {
-    CallStatus status;
-    switch (state.state) {
-      case CallStateEnum.STREAM:
-        status = CallStatus.connected;
-        break;
-      case CallStateEnum.ENDED:
-        status = CallStatus.ended;
-        break;
-      case CallStateEnum.FAILED:
-        status = CallStatus.failed;
-        break;
-      case CallStateEnum.CALL_INITIATION:
-        status = call.direction == Direction.incoming 
-            ? CallStatus.ringing 
-            : CallStatus.connecting;
-        break;
-      default:
-        status = CallStatus.connecting;
-        break;
-    }
-
-    return CallModel(
-      id: callId,
-      remoteIdentity: call.remote_identity ?? 'Unknown',
-      direction: call.direction == Direction.incoming 
-          ? CallDirection.incoming 
-          : CallDirection.outgoing,
-      status: status,
-      startTime: DateTime.now(), // In real implementation, track actual start time
-    );
-  }
+  // Call mapping now handled by background service
+  // CallModel _mapSipCallToCallModel(Call call, CallState state, String callId) { ... }
 
   @override
   void onNewMessage(SIPMessageRequest msg) {}
@@ -412,46 +470,12 @@ class SipUADataSource implements SipDataSource, SipUaHelperListener {
   @override
   void onNewReinvite(ReInvite event) {}
 
-  Future<void> _logCallFromModel(CallModel callModel, CallState state) async {
-    try {
-      final callEntity = CallEntity(
-        id: callModel.id,
-        remoteIdentity: callModel.remoteIdentity,
-        displayName: callModel.displayName,
-        direction: callModel.direction,
-        status: _mapCallStateToCallStatus(state.state),
-        startTime: callModel.startTime,
-        endTime: DateTime.now(),
-        duration: callModel.startTime != null 
-            ? DateTime.now().difference(callModel.startTime) 
-            : Duration.zero,
-      );
-      
-      await _callLogService.logCall(callEntity);
-      print('✅ Call logged from SIP datasource: ${callModel.remoteIdentity}');
-      
-    } catch (e) {
-      print('❌ Error logging call from SIP datasource: $e');
-    }
-  }
+  // Call logging now handled by background service
+  // Future<void> _logCallFromModel(CallModel callModel, CallState state) async { ... }
 
-  CallStatus _mapCallStateToCallStatus(CallStateEnum state) {
-    switch (state) {
-      case CallStateEnum.CALL_INITIATION:
-        return CallStatus.ringing;
-      case CallStateEnum.CONNECTING:
-        return CallStatus.connecting;
-      case CallStateEnum.CONFIRMED:
-      case CallStateEnum.STREAM:
-        return CallStatus.connected;
-      case CallStateEnum.ENDED:
-        return CallStatus.ended;
-      case CallStateEnum.FAILED:
-        return CallStatus.failed;
-      default:
-        return CallStatus.disconnected;
-    }
-  }
+  // Call state mapping now handled by background service
+  // CallStatus _mapCallStateToCallStatus(CallStateEnum state) { ... }
+
 
   @override
   void dispose() {
