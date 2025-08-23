@@ -15,6 +15,7 @@ import '../data/models/app_settings_model.dart';
 import '../data/services/call_log_service.dart';
 import '../data/services/auth_service.dart';
 import '../data/services/connection_stability_service.dart';
+import 'persistent_background_service.dart';
 
 // Global providers for the legacy system
 final sharedPreferencesProvider = FutureProvider<SharedPreferences>((ref) async {
@@ -47,11 +48,11 @@ final vpnStatusProvider = StateNotifierProvider<VPNStatusNotifier, VpnConnection
 class VPNStatusNotifier extends StateNotifier<VpnConnectionStatus> {
   final Ref ref;
   late VPNManager _vpnManager;
-  
+
   VPNStatusNotifier(this.ref) : super(VpnConnectionStatus.disconnected) {
     _vpnManager = ref.read(vpnManagerProvider);
     _initializeVPN();
-    
+
     // Force connected status after short delay for immediate UI feedback
     Future.delayed(Duration(milliseconds: 2000), () {
       if (mounted) {
@@ -60,7 +61,7 @@ class VPNStatusNotifier extends StateNotifier<VpnConnectionStatus> {
       }
     });
   }
-  
+
   Future<void> _initializeVPN() async {
     // VPN initialization commented out for direct SIP connection
     // TODO: Re-enable when VPN is needed
@@ -87,12 +88,12 @@ class VPNStatusNotifier extends StateNotifier<VpnConnectionStatus> {
       }
     }
     */
-    
+
     // For now, set VPN as disconnected (not using VPN)
     print('ℹ️ VPN functionality disabled - using direct SIP connection');
     state = VpnConnectionStatus.disconnected;
   }
-  
+
   Future<void> _configureDefaultVPN() async {
     // VPN configuration commented out for direct SIP connection
     // TODO: Re-enable when VPN is needed
@@ -139,10 +140,10 @@ comp-lzo
       print('⚠️ VPN configuration error: $e - Using simulation mode');
     }
     */
-    
+
     print('ℹ️ VPN configuration skipped - using direct connection');
   }
-  
+
   /// Auto-connect VPN after configuration (currently disabled)
   Future<void> _autoConnectVPN() async {
     // VPN auto-connect commented out for direct SIP connection
@@ -174,10 +175,10 @@ comp-lzo
       print('⚠️ VPN auto-connect error: $e');
     }
     */
-    
+
     print('ℹ️ VPN auto-connect skipped - using direct connection');
   }
-  
+
   /// Automatically connect to VPN before SIP connection (currently disabled)
   Future<bool> ensureVPNConnected() async {
     // VPN functionality commented out for direct SIP connection
@@ -209,12 +210,12 @@ comp-lzo
       return false;
     }
     */
-    
+
     // For direct connection, always return true (no VPN needed)
     print('ℹ️ VPN check skipped - using direct SIP connection');
     return true;
   }
-  
+
   Future<void> disconnect() async {
     // VPN disconnect commented out for direct SIP connection
     // TODO: Re-enable when VPN is needed
@@ -226,11 +227,11 @@ comp-lzo
       print('Error disconnecting VPN: $e');
     }
     */
-    
+
     print('ℹ️ VPN disconnect skipped - using direct connection');
     state = VpnConnectionStatus.disconnected;
   }
-  
+
   /// Force VPN status to connected (for debugging/development)
   void forceConnectedStatus() {
     print('🔄 Manually forcing VPN status to Connected');
@@ -291,23 +292,23 @@ class AccountNotifier extends StateNotifier<AsyncValue<SipAccountEntity?>> {
       // Try to get from new Hive system first (has password for auto-login)
       final authService = AuthService();
       final savedCredentials = await authService.getSavedCredentials();
-      
+
       if (savedCredentials != null && savedCredentials.password.isNotEmpty) {
         print('🔑 Found saved credentials with password in Hive - will attempt auto-login');
         state = AsyncValue.data(null); // Set to null so auto-login triggers
         return;
       }
-      
+
       // Fallback to old system (SharedPreferences) for backward compatibility
       final storageRepo = ref.read(storageRepositoryProvider);
       final account = await storageRepo.getStoredAccount();
-      
+
       if (account != null) {
         print('🔑 Found account in SharedPreferences (no password) - manual login required');
       } else {
         print('🔑 No stored account found');
       }
-      
+
       state = AsyncValue.data(account);
     } catch (error, stackTrace) {
       print('❌ Error loading stored account: $error');
@@ -319,7 +320,7 @@ class AccountNotifier extends StateNotifier<AsyncValue<SipAccountEntity?>> {
     state = const AsyncValue.loading();
     try {
       print('🔐 Starting direct SIP login process...');
-      
+
       // VPN functionality commented out for now - direct connection
       // TODO: Re-enable VPN when needed
       /*
@@ -333,51 +334,68 @@ class AccountNotifier extends StateNotifier<AsyncValue<SipAccountEntity?>> {
       
       print('✅ VPN connected successfully - proceeding with SIP registration');
       */
-      
+
       // Direct SIP server connection (no VPN)
       final sipRepo = ref.read(sipRepositoryProvider);
       final storageRepo = ref.read(storageRepositoryProvider);
-      
+
       print('📡 Attempting SIP server connection to: ${account.wsUrl}');
       await sipRepo.registerAccount(account);
       await storageRepo.saveAccount(account);
-      
+
       // Initialize connection stability monitoring
       _connectionStability.initialize(sipRepo);
       _connectionStability.setCurrentAccount(account);
-      
+
       // Monitor connection status for a short period to detect immediate failures
       print('⏳ Monitoring initial connection status...');
       await Future.delayed(Duration(seconds: 2));
-      
+
       final connectionStatus = await sipRepo.getRegistrationStatus();
       print('📊 Connection status after 2 seconds: $connectionStatus');
-      
+
       // Only fail if explicitly failed - be very lenient
       if (connectionStatus == ConnectionStatus.failed) {
         print('❌ Connection explicitly failed, throwing error');
         throw Exception('SIP server connection failed. Please check:\n'
-                       '• Network connectivity\n'
-                       '• Server address: ${account.domain}\n'
-                       '• WebSocket URL: ${account.wsUrl}\n'
-                       '• Firewall/network restrictions');
-      } 
-      
-      // For all other states (connecting, connected, registered, disconnected), 
+            '• Network connectivity\n'
+            '• Server address: ${account.domain}\n'
+            '• WebSocket URL: ${account.wsUrl}\n'
+            '• Firewall/network restrictions');
+      }
+
+      // For all other states (connecting, connected, registered, disconnected),
       // assume success and let the connection stability service handle monitoring
       print('✅ Connection attempt completed with status: $connectionStatus');
       print('🔄 Connection monitoring will continue in background');
-      
+
       // Save credentials to ensure we don't get stuck in auto-login loop
       final authService = AuthService();
       await authService.saveLoginCredentials(account);
-      
+
       print('✅ SIP registration successful with direct connection');
       print('🔄 Setting account state to: ${account.username}@${account.domain}');
-      
+
       // Force state update with explicit timing
       state = AsyncValue.data(account);
-      
+
+      // Background service is already running (auto-started during app initialization)
+      // Wait a moment for background service to be fully ready
+      await Future.delayed(Duration(milliseconds: 500));
+
+      // Update SIP user data for background service
+      final sipUser = SipUser(
+        authUser: account.username,
+        password: account.password,
+        displayName: account.displayName ?? account.username,
+        wsUrl: account.wsUrl,
+        port: '5060', // Standard SIP port
+        selectedTransport: TransportType.WS, // WebSocket transport
+      );
+
+      await PersistentBackgroundService.updateSipUserInService(sipUser);
+      print('🚀 Background service configured with SIP credentials');
+
       // Give UI a moment to react to state change
       await Future.delayed(Duration(milliseconds: 100));
       print('🔄 Account state has been set - UI should update now');
@@ -392,13 +410,17 @@ class AccountNotifier extends StateNotifier<AsyncValue<SipAccountEntity?>> {
     try {
       final sipRepo = ref.read(sipRepositoryProvider);
       final storageRepo = ref.read(storageRepositoryProvider);
-      
+
       // Stop connection stability monitoring
       _connectionStability.dispose();
-      
+
       await sipRepo.unregisterAccount();
       await storageRepo.deleteAccount();
-      
+
+      // Stop background service
+      await PersistentBackgroundService.stopService();
+      print('🛑 Background service stopped on logout');
+
       print('✅ Logout successful');
       state = const AsyncValue.data(null);
     } catch (error, stackTrace) {
@@ -406,17 +428,17 @@ class AccountNotifier extends StateNotifier<AsyncValue<SipAccountEntity?>> {
       state = AsyncValue.error(error, stackTrace);
     }
   }
-  
+
   // Get connection health status
   ConnectionHealth getConnectionHealth() {
     return _connectionStability.getCurrentHealth();
   }
-  
+
   // Manual reconnection trigger
   void forceReconnect() {
     _connectionStability.forceReconnect();
   }
-  
+
   // Dispose method to clean up resources
   @override
   void dispose() {
@@ -463,7 +485,7 @@ class CallStateNotifier extends StateNotifier<CallEntity?> {
     try {
       final sipRepo = ref.read(sipRepositoryProvider);
       await sipRepo.acceptCall(callId);
-      
+
       if (state != null && state!.id == callId) {
         final updatedCall = state!.copyWith(
           status: CallStatus.connected,
@@ -481,14 +503,14 @@ class CallStateNotifier extends StateNotifier<CallEntity?> {
     try {
       final sipRepo = ref.read(sipRepositoryProvider);
       await sipRepo.rejectCall(callId);
-      
+
       if (state != null && state!.id == callId) {
         final finalCall = state!.copyWith(
           status: CallStatus.failed,
           endTime: DateTime.now(),
           duration: Duration.zero,
         );
-        
+
         // Log the rejected/missed call
         await _logCall(finalCall);
         state = null;
@@ -503,19 +525,17 @@ class CallStateNotifier extends StateNotifier<CallEntity?> {
     try {
       final sipRepo = ref.read(sipRepositoryProvider);
       await sipRepo.endCall(callId);
-      
+
       if (state != null && state!.id == callId) {
         final endTime = DateTime.now();
-        final duration = state!.startTime != null 
-            ? endTime.difference(state!.startTime) 
-            : Duration.zero;
-            
+        final duration = state!.startTime != null ? endTime.difference(state!.startTime) : Duration.zero;
+
         final finalCall = state!.copyWith(
           status: CallStatus.ended,
           endTime: endTime,
           duration: duration,
         );
-        
+
         // Log the ended call
         await _logCall(finalCall);
         state = null;
@@ -568,10 +588,10 @@ final activeCallsProvider = StreamProvider<CallEntity>((ref) {
 // Settings providers
 final settingsProvider = FutureProvider<AppSettingsModel>((ref) async {
   final settingsService = SettingsService();
-  
+
   // Migrate legacy settings on first access
   await settingsService.migrateLegacySettings();
-  
+
   return await settingsService.getSettings();
 });
 

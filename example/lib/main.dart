@@ -10,33 +10,41 @@ import 'screens/modern_call_screen.dart';
 import 'data/services/ringtone_vibration_service.dart';
 import 'data/services/connection_stability_service.dart';
 import 'data/services/hive_service.dart';
+import 'src/persistent_background_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/services.dart';
+import 'dart:async';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // Initialize services
   final container = ProviderContainer();
-  
+
   // Initialize Hive database
   await HiveService.initialize();
-  
+
   // Initialize SIP data source
   await container.read(sipDataSourceProvider).initialize();
-  
+
   // Initialize ringtone and vibration service
   await RingtoneVibrationService().initialize();
-  
-  // Initialize connection stability service  
+
+  // Initialize connection stability service
   final connectionStability = ConnectionStabilityService();
-  
+
+  // Initialize and start background service for 24/7 SIP operation
+  await PersistentBackgroundService.initializeService();
+  await PersistentBackgroundService.startService();
+  print('✅ Background service initialized and started for persistent SIP connection');
+
   // Listen for network changes and trigger reconnection
   Connectivity().onConnectivityChanged.listen((List<ConnectivityResult> results) {
     if (results.isNotEmpty && results.first != ConnectivityResult.none) {
       connectionStability.onNetworkChanged();
     }
   });
-  
+
   runApp(
     UncontrolledProviderScope(
       container: container,
@@ -45,16 +53,133 @@ void main() async {
   );
 }
 
-class VoIPApp extends ConsumerWidget {
+class VoIPApp extends ConsumerStatefulWidget {
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<VoIPApp> createState() => _VoIPAppState();
+}
+
+class _VoIPAppState extends ConsumerState<VoIPApp> with WidgetsBindingObserver {
+  Timer? _heartbeatTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+
+    // Set up platform channel for incoming calls from background service
+    _setupIncomingCallChannel();
+
+    // Start heartbeat since app is launching (initially active)
+    _startHeartbeat();
+  }
+
+  @override
+  void dispose() {
+    _stopHeartbeat();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    switch (state) {
+      case AppLifecycleState.resumed:
+        print('📱 App RESUMED - notifying background service');
+        PersistentBackgroundService.setMainAppActive(true);
+        _startHeartbeat();
+        break;
+      case AppLifecycleState.paused:
+        print('📱 App PAUSED - background service will handle SIP');
+        PersistentBackgroundService.setMainAppActive(false);
+        _stopHeartbeat();
+        break;
+      case AppLifecycleState.inactive:
+        print('📱 App INACTIVE - transitioning to background service');
+        break;
+      case AppLifecycleState.detached:
+        print('📱 App DETACHED - background service active');
+        PersistentBackgroundService.setMainAppActive(false);
+        _stopHeartbeat();
+        break;
+      case AppLifecycleState.hidden:
+        print('📱 App HIDDEN - background service handling calls');
+        PersistentBackgroundService.setMainAppActive(false);
+        _stopHeartbeat();
+        break;
+    }
+  }
+
+  void _setupIncomingCallChannel() {
+    const platform = MethodChannel('sip_phone/incoming_call');
+    platform.setMethodCallHandler((call) async {
+      if (call.method == 'handleIncomingCall') {
+        final caller = call.arguments['caller'] as String? ?? 'Unknown';
+        final callId = call.arguments['callId'] as String? ?? '';
+        final fromBackground = call.arguments['fromBackground'] as bool? ?? false;
+
+        print('📞 Platform channel: Incoming call from $caller (ID: $callId, FromBackground: $fromBackground)');
+
+        if (fromBackground) {
+          // This is a call from the background service, navigate to call screen
+          _navigateToIncomingCall(caller, callId);
+        }
+      }
+    });
+  }
+
+  void _navigateToIncomingCall(String caller, String callId) {
+    // Navigate to call screen via the navigator
+    final context = navigatorKey.currentContext;
+    if (context != null) {
+      // Check if we need to get the call from background service
+      final incomingCall = PersistentBackgroundService.getIncomingCall();
+      if (incomingCall != null) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => ModernCallScreen(
+              call: CallEntity(
+                id: incomingCall.id ?? callId,
+                remoteIdentity: incomingCall.remote_identity ?? caller,
+                direction: CallDirection.incoming,
+                status: CallStatus.ringing,
+                startTime: DateTime.now(),
+              ),
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  void _startHeartbeat() {
+    _stopHeartbeat(); // Stop any existing timer
+
+    // Update main app status every 30 seconds while active
+    _heartbeatTimer = Timer.periodic(Duration(seconds: 30), (timer) {
+      PersistentBackgroundService.setMainAppActive(true);
+      print('💓 Main app heartbeat - confirming active status');
+    });
+
+    print('💓 Main app heartbeat started (30s interval)');
+  }
+
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    print('💔 Main app heartbeat stopped');
+  }
+
+  @override
+  Widget build(BuildContext context) {
     // Watch settings for theme
     final settingsAsync = ref.watch(settingsNotifierProvider);
     final themeMode = settingsAsync.maybeWhen(
       data: (settings) => settings.themeMode,
       orElse: () => ThemeMode.system,
     );
-    
+
     return MaterialApp(
       title: 'VoIP Phone',
       themeMode: themeMode,
@@ -156,14 +281,15 @@ class AppNavigator extends ConsumerWidget {
     // Check auto-login first
     final autoLoginAsync = ref.watch(autoLoginProvider);
     final accountState = ref.watch(accountProvider);
-    
+
     return autoLoginAsync.when(
       data: (savedCredentials) {
         return accountState.when(
           data: (account) {
-            print('🔍 Account state check: account=${account?.username ?? 'null'}, savedCreds=${savedCredentials?.username ?? 'null'}');
+            print(
+                '🔍 Account state check: account=${account?.username ?? 'null'}, savedCreds=${savedCredentials?.username ?? 'null'}');
             print('🔍 Account state AsyncValue type: ${accountState.runtimeType}');
-            
+
             if (account != null) {
               // User is logged in, show dialer with call handling
               print('✅ User logged in, showing main app for: ${account.username}@${account.domain}');
@@ -209,7 +335,7 @@ class AppNavigator extends ConsumerWidget {
             }
           });
         });
-        
+
         // Listen to account provider errors
         ref.listen<AsyncValue<SipAccountEntity?>>(accountProvider, (previous, next) {
           next.whenOrNull(
@@ -238,7 +364,7 @@ class AppNavigator extends ConsumerWidget {
             },
           );
         });
-        
+
         // Listen to call state changes
         ref.listen<CallEntity?>(callStateProvider, (previous, next) {
           if (next != null && previous == null) {
@@ -254,7 +380,7 @@ class AppNavigator extends ConsumerWidget {
             Navigator.of(context).popUntil((route) => route.isFirst);
           }
         });
-        
+
         return ModernDialerScreen();
       },
     );
@@ -384,12 +510,12 @@ class AppNavigator extends ConsumerWidget {
 
   Future<void> _attemptAutoLogin(WidgetRef ref, SipAccountEntity credentials) async {
     print('🔄 Attempting auto-login with saved credentials: ${credentials.username}@${credentials.domain}');
-    
+
     try {
       // Directly attempt login with the saved account
       await ref.read(accountProvider.notifier).login(credentials);
       print('✅ Auto-login completed successfully');
-      
+
       // The account state should now be updated automatically
       print('🔄 Account login completed - UI should rebuild automatically');
     } catch (e) {
@@ -409,7 +535,7 @@ class AppNavigator extends ConsumerWidget {
   void _handleIncomingCall(BuildContext context, CallEntity call) async {
     // Start ringtone and vibration
     await RingtoneVibrationService().startRinging();
-    
+
     // Navigate to call screen
     Navigator.of(context).push(
       MaterialPageRoute(
