@@ -431,6 +431,19 @@ class PersistentBackgroundService {
       await _handleSendDTMF(callId, digit);
     });
 
+    service.on('proceedWithBackgroundSipCall').listen((event) async {
+      final data = event as Map<String, dynamic>;
+      final number = data['number'] as String;
+      final webrtcReady = data['webrtcReady'] as bool? ?? false;
+      await _handleProceedWithSipCall(number, webrtcReady);
+    });
+
+    service.on('getSipCredentialsForCall').listen((event) async {
+      final data = event as Map<String, dynamic>;
+      final number = data['number'] as String;
+      await _handleGetSipCredentialsForCall(number);
+    });
+
     service.on('forwardCallToMainApp').listen((event) {
       print('🔄 Background service received forward call to main app request');
       final data = event as Map<String, dynamic>;
@@ -568,20 +581,9 @@ class PersistentBackgroundService {
         print('📱 Main app is active - background service in standby mode (NO SIP registration)');
         _isMainAppActive = true;
         
-        // CRITICAL FIX: Completely destroy background SIP when main app is active
-        if (_backgroundSipHelper != null) {
-          print('📴 Completely destroying background SIP helper - main app will handle calls');
-          try {
-            if (_backgroundSipHelper!.registered) {
-              await _backgroundSipHelper!.unregister();
-            }
-            _backgroundSipHelper!.stop();
-            _backgroundSipHelper = null; // Destroy completely
-            print('✅ Background SIP completely destroyed for main app');
-          } catch (e) {
-            print('❌ Error destroying background SIP: $e');
-          }
-        }
+        // CRITICAL: Single SIP architecture - background service ALWAYS maintains SIP helper
+        // Main app active state doesn't affect SIP operations
+        print('✅ Background SIP helper maintained (single SIP architecture)');
         
         _updateServiceNotification('SIP Phone (Standby)', 'Main app active - background service ready');
       } else {
@@ -615,34 +617,9 @@ class PersistentBackgroundService {
     try {
       print('🔌 Connecting SIP in background...');
 
-      // CRITICAL: Add delay and multiple checks to prevent race conditions
-      await Future.delayed(Duration(milliseconds: 800));
-      
-      // Triple check main app status before proceeding (prevents concurrent modification)
-      if (_isMainAppActive) {
-        print('🚫 Main app became active during initial connection setup - aborting');
-        return;
-      }
-      
-      // Additional check via SharedPreferences to prevent race conditions
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        final mainAppActiveCheck = prefs.getBool('main_app_is_active') ?? false;
-        if (mainAppActiveCheck) {
-          print('🚫 SharedPreferences check: Main app is active - aborting background SIP');
-          _isMainAppActive = true;
-          return;
-        }
-      } catch (e) {
-        print('⚠️ Could not perform SharedPreferences check: $e');
-      }
-      
-      // Final delay to ensure no rapid state changes
+      // CRITICAL: Background service now handles ALL SIP operations regardless of main app state
+      // Small delay for stability
       await Future.delayed(Duration(milliseconds: 200));
-      if (_isMainAppActive) {
-        print('🚫 Final check: Main app became active - aborting');
-        return;
-      }
 
       if (_backgroundSipHelper == null) {
         print('⚠️ SIP helper not initialized - creating new one');
@@ -722,26 +699,9 @@ class PersistentBackgroundService {
       print('📋 SIP URI: $properSipUri');
       print('📊 Main app active status: $_isMainAppActive');
 
-      // CRITICAL: Multiple checks before connecting to prevent dual registration
-      if (_isMainAppActive) {
-        print('🚫 Main app is active - ABORTING background SIP registration to prevent dual registration');
-        return;
-      }
-
-      // Additional real-time check via SharedPreferences
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        final mainAppActiveNow = prefs.getBool('main_app_is_active') ?? false;
-        if (mainAppActiveNow) {
-          print('🚫 Last-second SharedPreferences check: Main app is active - ABORTING SIP registration');
-          _isMainAppActive = true;
-          return;
-        }
-      } catch (e) {
-        print('⚠️ Could not check main app status before connecting: $e');
-      }
-
-      print('✅ All checks passed - proceeding with background SIP registration');
+      // CRITICAL: With single SIP architecture, background service ALWAYS handles SIP registration
+      // Main app active status is irrelevant - background service is the sole SIP handler
+      print('✅ Using single SIP architecture - background service handles all SIP operations regardless of main app state');
       
       // Synchronization lock to prevent concurrent modifications during start
       if (_backgroundSipHelper == null) {
@@ -756,15 +716,7 @@ class PersistentBackgroundService {
       for (int attempt = 0; attempt < 10; attempt++) {
         await Future.delayed(Duration(milliseconds: 500));
         
-        // Check if main app became active during registration
-        if (_isMainAppActive) {
-          print('🚫 Main app became active during registration - stopping background SIP');
-          if (_backgroundSipHelper != null && _backgroundSipHelper!.registered) {
-            await _backgroundSipHelper!.unregister();
-          }
-          _backgroundSipHelper?.stop();
-          return;
-        }
+        // Continue with single SIP architecture - main app status doesn't affect registration
         
         if (_backgroundSipHelper?.registered == true) {
           print('✅✅ Background SIP successfully registered after ${attempt + 1} checks! ✅✅');
@@ -833,25 +785,17 @@ class PersistentBackgroundService {
       }
 
       if (mainAppActive) {
-        print('📱 Keep-alive: Main app active - background in standby (NO SIP)');
+        print('📱 Keep-alive: Main app active - background SIP continues (single SIP architecture)');
 
-        // CRITICAL FIX: Completely destroy background SIP when main app is active
-        if (_backgroundSipHelper != null) {
-          print('📴 Keep-alive: Completely destroying background SIP - main app handles all calls');
-          try {
-            if (_backgroundSipHelper!.registered) {
-              await _backgroundSipHelper!.unregister();
-            }
-            _backgroundSipHelper!.stop();
-            _backgroundSipHelper = null; // Destroy completely
-            print('✅ Keep-alive: Background SIP completely destroyed');
-          } catch (e) {
-            print('❌ Keep-alive: Error destroying background SIP: $e');
-          }
-        }
+        // CRITICAL: Single SIP architecture - background service ALWAYS maintains SIP
+        // Main app active state is for UI coordination only
+        print('✅ Keep-alive: Background SIP helper maintained for calls');
 
-        _updateServiceNotification('SIP Phone (Standby)', 'Main app active - background service ready');
-        return;
+        _updateServiceNotification('SIP Phone (Main App Active)', 'Main app active - background service ready');
+        // Don't return - continue with SIP monitoring
+      } else {
+        print('📱 Keep-alive: Main app in background - SIP continues normally');
+        _updateServiceNotification('SIP Phone Active', 'Ready to receive calls - Running in background for 24/7 operation');
       }
 
       if (_backgroundSipHelper?.registered == true) {
@@ -1309,12 +1253,14 @@ class PersistentBackgroundService {
     // Save to SharedPreferences asynchronously
     _handleMainAppStatusChange(isActive);
 
+    // CRITICAL: With single SIP architecture, background service ALWAYS maintains SIP connection
+    // Main app active state is tracked for UI coordination only, not SIP control
     if (isActive) {
-      print('📱 Main app active - STOPPING background SIP completely');
-      _completelyStopBackgroundSipForMainApp();
+      print('📱 Main app active - background SIP continues (single SIP architecture)');
+      _updateServiceNotification('SIP Phone (Main App Active)', 'Main app active - background service ready');
     } else {
-      print('🔄 Main app backgrounded - re-registering background SIP');
-      _reregisterAfterMainAppBackground();
+      print('🔄 Main app backgrounded - background SIP continues handling calls');
+      _updateServiceNotification('SIP Phone Active', 'Ready to receive calls - Running in background for 24/7 operation');
     }
   }
 
@@ -1629,8 +1575,55 @@ class PersistentBackgroundService {
     
     if (_backgroundSipHelper != null && _backgroundSipHelper!.registered) {
       try {
+        // CRITICAL FIX: Share SIP credentials with main app to make WebRTC call
+        // Main app has Activity context needed for WebRTC operations
+        print('🔄 Background service sharing SIP credentials with main app for WebRTC call');
+        
+        // Send call request to main app for WebRTC setup with credential sharing
+        _serviceInstance?.invoke('initiateSipCallWithWebRTC', {
+          'number': number,
+          'sipHelper': 'background', // Indicates which helper has registration
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+        
+        print('✅ Call coordination request sent to main app');
+        
+      } catch (e) {
+        print('❌ Error coordinating call with main app: $e');
+        
+        // Notify main app of failure
+        _serviceInstance?.invoke('callInitiated', {
+          'number': number,
+          'success': false,
+          'error': e.toString(),
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+      }
+    } else {
+      print('❌ Background SIP helper not available for making call');
+      
+      // Notify main app of failure
+      _serviceInstance?.invoke('callInitiated', {
+        'number': number,
+        'success': false,
+        'error': 'SIP not registered',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+    }
+  }
+  
+  @pragma('vm:entry-point')
+  static Future<void> _handleProceedWithSipCall(String number, bool webrtcReady) async {
+    print('📞 Background service proceeding with SIP call after WebRTC coordination: $number');
+    print('📞 WebRTC ready status: $webrtcReady');
+    
+    if (_backgroundSipHelper != null && _backgroundSipHelper!.registered) {
+      try {
+        // Now that main app has confirmed WebRTC is ready, proceed with actual SIP call
+        print('📞 Making actual SIP call from background service (WebRTC coordinated)');
+        
         final result = await _backgroundSipHelper!.call(number, voiceOnly: true);
-        print(result ? '✅ Call initiated successfully' : '❌ Call initiation failed');
+        print(result ? '✅ SIP call initiated successfully from background' : '❌ SIP call initiation failed from background');
         
         // Notify main app of call status
         _serviceInstance?.invoke('callInitiated', {
@@ -1638,34 +1631,118 @@ class PersistentBackgroundService {
           'success': result,
           'timestamp': DateTime.now().millisecondsSinceEpoch,
         });
+        
       } catch (e) {
-        print('❌ Error making call in background service: $e');
+        print('❌ Error making SIP call in background service: $e');
+        
+        // Notify main app of failure
+        _serviceInstance?.invoke('callInitiated', {
+          'number': number,
+          'success': false,
+          'error': e.toString(),
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
       }
     } else {
       print('❌ Background SIP helper not available for making call');
+      
+      // Notify main app of failure
+      _serviceInstance?.invoke('callInitiated', {
+        'number': number,
+        'success': false,
+        'error': 'SIP not registered',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
     }
   }
-  
+
+  @pragma('vm:entry-point')
+  static Future<void> _handleGetSipCredentialsForCall(String number) async {
+    print('📞 Background service providing SIP credentials for call to: $number');
+    
+    try {
+      if (_currentSipUser != null) {
+        // Prepare SIP credentials from current background registration
+        // Extract domain from sipUri if available (format: sip:username@domain)
+        String domain = '';
+        String username = _currentSipUser!.authUser;
+        
+        if (_currentSipUser!.sipUri != null) {
+          final uri = _currentSipUser!.sipUri!;
+          if (uri.contains('@')) {
+            final parts = uri.split('@');
+            if (parts.length > 1) {
+              domain = parts[1];
+              // Also extract username from URI if needed
+              final userPart = parts[0];
+              if (userPart.startsWith('sip:')) {
+                username = userPart.substring(4);
+              }
+            }
+          }
+        }
+        
+        final credentials = {
+          'id': 'background_service_temp',
+          'username': username,
+          'password': _currentSipUser!.password,
+          'domain': domain,
+          'wsUrl': _currentSipUser!.wsUrl ?? '',
+          'displayName': _currentSipUser!.displayName,
+          'extraHeaders': _currentSipUser!.wsExtraHeaders,
+        };
+        
+        print('📞 Sending SIP credentials to main app for WebRTC call');
+        
+        // Send credentials to main app
+        _serviceInstance?.invoke('sipCredentialsForCall', {
+          'number': number,
+          'credentials': credentials,
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+        
+        print('✅ SIP credentials sent to main app');
+        
+      } else {
+        print('❌ No SIP user available to provide credentials');
+        
+        // Notify main app of failure
+        _serviceInstance?.invoke('callInitiated', {
+          'number': number,
+          'success': false,
+          'error': 'No SIP credentials available',
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+      }
+    } catch (e) {
+      print('❌ Error providing SIP credentials: $e');
+      
+      // Notify main app of failure
+      _serviceInstance?.invoke('callInitiated', {
+        'number': number,
+        'success': false,
+        'error': e.toString(),
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+    }
+  }
+
   @pragma('vm:entry-point')
   static Future<void> _handleAcceptCall(String callId) async {
-    print('📞 Background service handling accept call: $callId');
+    print('📞 Background service received accept call request: $callId');
     
     if (_currentIncomingCall != null && _currentIncomingCall!.id == callId) {
-      try {
-        final mediaConstraints = <String, dynamic>{
-          'audio': true,
-          'video': false,
-        };
-        _currentIncomingCall!.answer(mediaConstraints);
-        
-        // Move to active call
-        _currentActiveCall = _currentIncomingCall;
-        _currentIncomingCall = null;
-        
-        print('✅ Call accepted in background service');
-      } catch (e) {
-        print('❌ Error accepting call in background service: $e');
-      }
+      print('🔄 Forwarding call accept to main app (WebRTC requires Activity context)');
+      
+      // Background service cannot handle WebRTC - forward to main app
+      _serviceInstance?.invoke('forwardCallToMainApp', {
+        'action': 'acceptCall',
+        'callId': callId,
+        'caller': _currentIncomingCall!.remote_identity ?? 'Unknown',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+      
+      print('✅ Call accept request forwarded to main app');
     } else {
       print('❌ No matching incoming call found for accept: $callId');
     }
