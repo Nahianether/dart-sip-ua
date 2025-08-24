@@ -12,6 +12,7 @@ import 'data/services/connection_stability_service.dart';
 import 'data/services/hive_service.dart';
 import 'src/persistent_background_service.dart';
 import 'src/battery_optimization_helper.dart';
+import 'data/models/sip_account_model.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
@@ -26,8 +27,9 @@ void main() async {
   // Initialize Hive database
   await HiveService.initialize();
 
-  // CRITICAL: No foreground SIP initialization - using single background SIP instance only
-  // The background service handles all SIP operations via service.invoke/service.on communication
+  // CRITICAL: Initialize SIP helper for WebRTC (calls) but NO registration
+  // Background service handles registration, main app handles WebRTC media
+  await container.read(sipDataSourceProvider).initializeWithoutRegistration();
 
   // Initialize ringtone and vibration service
   await RingtoneVibrationService().initialize();
@@ -254,6 +256,57 @@ class _VoIPAppState extends ConsumerState<VoIPApp> with WidgetsBindingObserver {
       }
     });
     
+    service.on('initiateSipCallWithWebRTC').listen((event) {
+      if (event != null) {
+        final data = event;
+        final number = data['number'] as String? ?? '';
+        final sipHelper = data['sipHelper'] as String? ?? '';
+        
+        print('📞 Main app coordinating WebRTC call with background SIP: $number');
+        print('📞 SIP registration handled by: $sipHelper');
+        
+        _handleSipCallWithWebRTC(number);
+      }
+    });
+
+    service.on('sipCredentialsForCall').listen((event) {
+      if (event != null) {
+        final data = event;
+        final number = data['number'] as String? ?? '';
+        final credentials = data['credentials'] as Map<String, dynamic>? ?? {};
+        
+        print('📞 Received SIP credentials from background service for call to: $number');
+        _makeCallWithCredentials(number, credentials);
+      }
+    });
+
+    service.on('forwardCallToMainApp').listen((event) {
+      if (event != null) {
+        final data = event;
+        final action = data['action'] as String? ?? '';
+        
+        print('🔄 Background service forwarding call action to main app: $action');
+        
+        switch (action) {
+          case 'makeCall':
+            final number = data['number'] as String? ?? '';
+            print('📞 Main app handling make call to: $number');
+            _handleMakeCallInMainApp(number);
+            break;
+            
+          case 'acceptCall':
+            final callId = data['callId'] as String? ?? '';
+            final caller = data['caller'] as String? ?? 'Unknown';
+            print('📞 Main app handling accept call from: $caller (ID: $callId)');
+            _handleAcceptCallInMainApp(callId, caller);
+            break;
+            
+          default:
+            print('⚠️ Unknown call action forwarded: $action');
+        }
+      }
+    });
+    
     print('✅ Background service event listeners setup complete');
   }
 
@@ -338,6 +391,128 @@ class _VoIPAppState extends ConsumerState<VoIPApp> with WidgetsBindingObserver {
       print('✅ SIP state sync request sent to background service');
     } catch (e) {
       print('❌ Failed to sync SIP state from background: $e');
+    }
+  }
+
+  void _handleMakeCallInMainApp(String number) async {
+    print('📞 Main app received call request for: $number');
+    
+    try {
+      // Main app should configure its SIP helper with the same registration as background service
+      // and then coordinate the call with proper WebRTC context
+      
+      // For now, let's use the providers system to make the call properly
+      final container = ProviderContainer();
+      
+      // Check if we have an active SIP connection via providers
+      final callStateNotifier = container.read(callStateProvider.notifier);
+      
+      print('📞 Main app attempting to make call through providers system');
+      await callStateNotifier.makeCall(number);
+      print('✅ Call initiated successfully through providers system');
+      
+    } catch (e) {
+      print('❌ Error making call in main app: $e');
+      
+      // Fallback: Try to notify user of the issue
+      print('📞 Call failed - will try alternative approach');
+    }
+  }
+
+  void _handleSipCallWithWebRTC(String number) async {
+    print('📞 Main app handling WebRTC call with background SIP credentials to: $number');
+    
+    try {
+      final container = ProviderContainer();
+      
+      // CRITICAL FIX: Request SIP credentials from background service to make call in main app
+      // This avoids WebRTC context issues while using background service's registration
+      print('📞 Requesting SIP credentials from background service for WebRTC call');
+      
+      final service = FlutterBackgroundService();
+      service.invoke('getSipCredentialsForCall', {
+        'number': number,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+      
+      // The background service will respond with credentials, then main app makes the call
+      print('✅ SIP credentials requested from background service');
+      
+    } catch (e) {
+      print('❌ Error requesting SIP credentials from background service: $e');
+      
+      // Notify background service of failure
+      final service = FlutterBackgroundService();
+      service.invoke('callInitiated', {
+        'number': number,
+        'success': false,
+        'error': e.toString(),
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+    }
+  }
+
+  void _makeCallWithCredentials(String number, Map<String, dynamic> credentials) async {
+    print('📞 Main app making WebRTC call with background SIP credentials to: $number');
+    
+    try {
+      final container = ProviderContainer();
+      
+      // Get the main app's SIP data source (initialized for WebRTC operations)
+      final sipDataSource = container.read(sipDataSourceProvider);
+      
+      // Create a temporary SIP account with the background service's credentials
+      final sipAccount = SipAccountModel(
+        id: credentials['id'] ?? 'temp_call_account',
+        username: credentials['username'] ?? '',
+        password: credentials['password'] ?? '',
+        domain: credentials['domain'] ?? '',
+        wsUrl: credentials['wsUrl'] ?? '',
+        displayName: credentials['displayName'],
+        extraHeaders: credentials['extraHeaders'] != null 
+          ? Map<String, String>.from(credentials['extraHeaders']) 
+          : null,
+      );
+      
+      print('📞 Temporarily registering main app SIP helper with background credentials');
+      
+      // Register the main app's SIP helper with the background service's credentials
+      await sipDataSource.registerAccount(sipAccount);
+      
+      // Small delay to ensure registration completes
+      await Future.delayed(Duration(milliseconds: 500));
+      
+      // Now make the call with proper WebRTC context
+      print('📞 Making WebRTC-enabled call in main app using background credentials');
+      final callStateNotifier = container.read(callStateProvider.notifier);
+      await callStateNotifier.makeCall(number);
+      
+      print('✅ WebRTC call initiated successfully in main app');
+      
+    } catch (e) {
+      print('❌ Error making WebRTC call with credentials: $e');
+      
+      // Notify background service of failure
+      final service = FlutterBackgroundService();
+      service.invoke('callInitiated', {
+        'number': number,
+        'success': false,
+        'error': e.toString(),
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+    }
+  }
+
+  void _handleAcceptCallInMainApp(String callId, String caller) async {
+    print('📞 Main app accepting call from: $caller (ID: $callId)');
+    
+    try {
+      // Navigate to call screen and handle accept there
+      _navigateToIncomingCall(caller, callId);
+      print('✅ Navigated to call screen for accept');
+      
+    } catch (e) {
+      print('❌ Error handling accept call in main app: $e');
     }
   }
 

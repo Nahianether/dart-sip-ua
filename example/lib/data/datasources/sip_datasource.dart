@@ -11,6 +11,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 
 abstract class SipDataSource {
   Future<void> initialize();
+  Future<void> initializeWithoutRegistration();
   Future<void> registerAccount(SipAccountModel account);
   Future<void> unregisterAccount();
   Future<SipAccountModel?> getCurrentAccount();
@@ -52,6 +53,15 @@ class SipUADataSource implements SipDataSource, SipUaHelperListener {
   Future<void> initialize() async {
     _sipHelper = SIPUAHelper();
     _sipHelper.addSipUaHelperListener(this);
+  }
+
+  /// Initialize SIP helper for WebRTC operations without registration
+  /// Registration is handled by background service
+  Future<void> initializeWithoutRegistration() async {
+    print('🔧 Initializing SIP helper for WebRTC operations only (no registration)');
+    _sipHelper = SIPUAHelper();
+    _sipHelper.addSipUaHelperListener(this);
+    print('✅ SIP helper ready for WebRTC operations');
   }
 
   @override
