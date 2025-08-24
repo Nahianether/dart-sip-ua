@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -438,6 +439,18 @@ class PersistentBackgroundService {
 
       // This will be handled by the main app - just log for now
       print('📞 Call forwarded to main app: $caller (ID: $callId)');
+    });
+
+    service.on('syncSipState').listen((event) {
+      print('🔄 Syncing current SIP state to main app on request');
+      _syncCurrentSipStateToMainApp(service);
+    });
+
+    service.on('registerSip').listen((event) async {
+      print('🔐 Processing SIP registration request from main app');
+      final data = event as Map<String, dynamic>;
+      final accountJson = data['account'] as String;
+      await _handleRegisterSipFromMainApp(service, accountJson);
     });
 
     service.on('ping').listen((event) {
@@ -1798,6 +1811,76 @@ class PersistentBackgroundService {
       print('🧹 Cleared call data from SharedPreferences for call: $callId');
     } catch (e) {
       print('❌ Error clearing call data from SharedPreferences: $e');
+    }
+  }
+
+  /// Syncs current SIP state from background service to main app
+  static void _syncCurrentSipStateToMainApp(ServiceInstance service) {
+    print('🔄 Syncing current SIP state to main app');
+    
+    try {
+      final sipState = {
+        'isRegistered': _backgroundSipHelper?.registered ?? false,
+        'currentUser': _currentSipUser?.toJsonString(),
+        'isServiceRunning': _isServiceRunning,
+        'hasIncomingCall': _currentIncomingCall != null,
+        'hasActiveCall': _currentActiveCall != null,
+        'incomingCallerId': _currentIncomingCall?.remote_identity,
+        'activeCallerId': _currentActiveCall?.remote_identity,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      };
+
+      // Send current SIP state to main app
+      service.invoke('currentSipState', sipState);
+      print('✅ SIP state synced to main app: registered=${sipState['isRegistered']}, hasIncoming=${sipState['hasIncomingCall']}, hasActive=${sipState['hasActiveCall']}');
+    } catch (e) {
+      print('❌ Error syncing SIP state to main app: $e');
+    }
+  }
+
+  /// Handles SIP registration request from main app
+  static Future<void> _handleRegisterSipFromMainApp(ServiceInstance service, String accountJson) async {
+    print('🔐 Processing SIP registration from main app');
+    
+    try {
+      // Parse the account from JSON
+      final accountData = Map<String, dynamic>.from(jsonDecode(accountJson));
+      
+      // Create SipUser from account data
+      final sipUser = SipUser(
+        authUser: accountData['username'] ?? '',
+        password: accountData['password'] ?? '',
+        displayName: accountData['displayName'] ?? accountData['username'] ?? '',
+        wsUrl: accountData['wsUrl'],
+        port: '5060',
+        selectedTransport: TransportType.WS,
+      );
+
+      print('🔐 Registering SIP account: ${sipUser.authUser}@${accountData['domain'] ?? 'unknown'}');
+
+      // Use existing SIP connection method
+      await _connectSipInBackground(sipUser);
+      
+      // Notify main app of registration result
+      final registrationResult = {
+        'success': _backgroundSipHelper?.registered ?? false,
+        'account': sipUser.authUser,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      };
+      
+      service.invoke('registrationResult', registrationResult);
+      print('✅ SIP registration completed, result sent to main app: ${registrationResult['success']}');
+      
+    } catch (e, stack) {
+      print('❌ SIP registration failed: $e');
+      print('❌ Stack trace: $stack');
+      
+      // Notify main app of registration failure
+      service.invoke('registrationResult', {
+        'success': false,
+        'error': e.toString(),
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
     }
   }
 }

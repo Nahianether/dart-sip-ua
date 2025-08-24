@@ -1,5 +1,8 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sip_ua/sip_ua.dart';
 import 'user_state/sip_user.dart';
@@ -336,39 +339,27 @@ class AccountNotifier extends StateNotifier<AsyncValue<SipAccountEntity?>> {
       print('✅ VPN connected successfully - proceeding with SIP registration');
       */
 
-      // Direct SIP server connection (no VPN)
-      final sipRepo = ref.read(sipRepositoryProvider);
+      // CRITICAL: Use single SIP registration via background service only
+      print('📡 Requesting SIP registration via background service to: ${account.wsUrl}');
+      
+      // Save account locally for storage
       final storageRepo = ref.read(storageRepositoryProvider);
-
-      print('📡 Attempting SIP server connection to: ${account.wsUrl}');
-      await sipRepo.registerAccount(account);
       await storageRepo.saveAccount(account);
 
-      // Initialize connection stability monitoring
-      _connectionStability.initialize(sipRepo);
-      _connectionStability.setCurrentAccount(account);
-
-      // Monitor connection status for a short period to detect immediate failures
-      print('⏳ Monitoring initial connection status...');
-      await Future.delayed(Duration(seconds: 2));
-
-      final connectionStatus = await sipRepo.getRegistrationStatus();
-      print('📊 Connection status after 2 seconds: $connectionStatus');
-
-      // Only fail if explicitly failed - be very lenient
-      if (connectionStatus == ConnectionStatus.failed) {
-        print('❌ Connection explicitly failed, throwing error');
-        throw Exception('SIP server connection failed. Please check:\n'
+      // Register SIP account via background service instead of foreground
+      final registrationResult = await _registerSipViaBackgroundService(account);
+      
+      if (!registrationResult) {
+        throw Exception('SIP registration failed via background service. Please check:\n'
             '• Network connectivity\n'
             '• Server address: ${account.domain}\n'
             '• WebSocket URL: ${account.wsUrl}\n'
+            '• Background service status\n'
             '• Firewall/network restrictions');
       }
 
-      // For all other states (connecting, connected, registered, disconnected),
-      // assume success and let the connection stability service handle monitoring
-      print('✅ Connection attempt completed with status: $connectionStatus');
-      print('🔄 Connection monitoring will continue in background');
+      print('✅ SIP registration completed via background service');
+      print('🔄 All SIP operations now handled by background service');
 
       // Save credentials to ensure we don't get stuck in auto-login loop
       final authService = AuthService();
@@ -380,22 +371,8 @@ class AccountNotifier extends StateNotifier<AsyncValue<SipAccountEntity?>> {
       // Force state update with explicit timing
       state = AsyncValue.data(account);
 
-      // Background service is already running (auto-started during app initialization)
-      // Wait a moment for background service to be fully ready
-      await Future.delayed(Duration(milliseconds: 500));
-
-      // Update SIP user data for background service
-      final sipUser = SipUser(
-        authUser: account.username,
-        password: account.password,
-        displayName: account.displayName ?? account.username,
-        wsUrl: account.wsUrl,
-        port: '5060', // Standard SIP port
-        selectedTransport: TransportType.WS, // WebSocket transport
-      );
-
-      await PersistentBackgroundService.updateSipUserInService(sipUser);
-      print('🚀 Background service configured with SIP credentials');
+      // Background service is already running and has completed registration
+      // No need to update SIP user separately as registration handles it
 
       // Give UI a moment to react to state change
       await Future.delayed(Duration(milliseconds: 100));
@@ -403,6 +380,54 @@ class AccountNotifier extends StateNotifier<AsyncValue<SipAccountEntity?>> {
     } catch (error, stackTrace) {
       print('❌ Login failed: $error');
       state = AsyncValue.error(error, stackTrace);
+    }
+  }
+
+  /// Register SIP account via background service
+  Future<bool> _registerSipViaBackgroundService(SipAccountEntity account) async {
+    print('🔐 Starting SIP registration via background service');
+    
+    try {
+      final service = FlutterBackgroundService();
+      final accountJson = jsonEncode(account.toJson());
+      
+      // Send registration request to background service
+      service.invoke('registerSip', {'account': accountJson});
+      print('📡 Registration request sent to background service');
+      
+      // Wait for registration result with timeout
+      final completer = Completer<bool>();
+      late StreamSubscription subscription;
+      
+      subscription = service.on('registrationResult').listen((event) {
+        if (event != null) {
+          final data = event;
+          final success = data['success'] as bool? ?? false;
+          final error = data['error'] as String?;
+          
+          print('📋 Registration result received: success=$success, error=$error');
+          
+          if (!completer.isCompleted) {
+            subscription.cancel();
+            completer.complete(success);
+          }
+        }
+      });
+      
+      // 30 second timeout for registration
+      final registrationResult = await completer.future.timeout(
+        Duration(seconds: 30),
+        onTimeout: () {
+          subscription.cancel();
+          print('⏰ Registration timeout after 30 seconds');
+          return false;
+        },
+      );
+      
+      return registrationResult;
+    } catch (e) {
+      print('❌ Error during SIP registration via background service: $e');
+      return false;
     }
   }
 

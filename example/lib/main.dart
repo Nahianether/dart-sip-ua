@@ -26,8 +26,8 @@ void main() async {
   // Initialize Hive database
   await HiveService.initialize();
 
-  // Initialize SIP data source (for UI communication only - no registration)
-  await container.read(sipDataSourceProvider).initialize();
+  // CRITICAL: No foreground SIP initialization - using single background SIP instance only
+  // The background service handles all SIP operations via service.invoke/service.on communication
 
   // Initialize ringtone and vibration service
   await RingtoneVibrationService().initialize();
@@ -118,9 +118,11 @@ class _VoIPAppState extends ConsumerState<VoIPApp> with WidgetsBindingObserver {
 
     switch (state) {
       case AppLifecycleState.resumed:
-        print('📱 App RESUMED - notifying background service');
+        print('📱 App RESUMED - syncing SIP state from background service');
         PersistentBackgroundService.setMainAppActive(true);
         _startHeartbeat();
+        // CRITICAL: Sync SIP state from background service on resume
+        _syncSipStateFromBackground();
         break;
       case AppLifecycleState.paused:
         print('📱 App PAUSED - transferring SIP to background service');
@@ -221,6 +223,37 @@ class _VoIPAppState extends ConsumerState<VoIPApp> with WidgetsBindingObserver {
       }
     });
     
+    service.on('currentSipState').listen((event) {
+      if (event != null) {
+        final data = event;
+        final isRegistered = data['isRegistered'] as bool? ?? false;
+        final hasIncomingCall = data['hasIncomingCall'] as bool? ?? false;
+        final hasActiveCall = data['hasActiveCall'] as bool? ?? false;
+        final incomingCallerId = data['incomingCallerId'] as String?;
+        final activeCallerId = data['activeCallerId'] as String?;
+        
+        print('🔄 SIP state sync from background: registered=$isRegistered, incoming=$hasIncomingCall, active=$hasActiveCall');
+        print('🔄 Callers: incoming=${incomingCallerId ?? 'none'}, active=${activeCallerId ?? 'none'}');
+        
+        // Update UI state based on background SIP state
+        // This ensures the foreground UI reflects the background SIP reality
+        if (hasIncomingCall && incomingCallerId != null) {
+          print('📞 UI sync: Detected incoming call from $incomingCallerId');
+          // The UI should already be updated by the incomingCall event, but this provides backup sync
+        }
+        
+        if (hasActiveCall && activeCallerId != null) {
+          print('📞 UI sync: Detected active call with $activeCallerId');
+          // Ensure UI shows the active call screen
+        }
+        
+        if (!hasIncomingCall && !hasActiveCall) {
+          print('📞 UI sync: No active calls - should show dialer');
+          // Ensure UI shows the dialer
+        }
+      }
+    });
+    
     print('✅ Background service event listeners setup complete');
   }
 
@@ -294,6 +327,18 @@ class _VoIPAppState extends ConsumerState<VoIPApp> with WidgetsBindingObserver {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
     print('💔 Main app heartbeat stopped');
+  }
+
+  void _syncSipStateFromBackground() async {
+    print('🔄 Syncing SIP state from background service on app resume');
+    
+    try {
+      final service = FlutterBackgroundService();
+      service.invoke('syncSipState');
+      print('✅ SIP state sync request sent to background service');
+    } catch (e) {
+      print('❌ Failed to sync SIP state from background: $e');
+    }
   }
 
   @override

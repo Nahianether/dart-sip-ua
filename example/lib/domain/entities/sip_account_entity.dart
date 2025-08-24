@@ -58,6 +58,36 @@ class SipAccountEntity extends Equatable {
     );
   }
 
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'username': username,
+      'password': password,
+      'domain': domain,
+      'wsUrl': wsUrl,
+      'displayName': displayName,
+      'extraHeaders': extraHeaders,
+      'status': status.index,
+      'isDefault': isDefault,
+    };
+  }
+
+  factory SipAccountEntity.fromJson(Map<String, dynamic> json) {
+    return SipAccountEntity(
+      id: json['id'] ?? '',
+      username: json['username'] ?? '',
+      password: json['password'] ?? '',
+      domain: json['domain'] ?? '',
+      wsUrl: json['wsUrl'] ?? '',
+      displayName: json['displayName'],
+      extraHeaders: json['extraHeaders'] != null 
+        ? Map<String, String>.from(json['extraHeaders']) 
+        : null,
+      status: ConnectionStatus.values[json['status'] ?? 0],
+      isDefault: json['isDefault'] ?? false,
+    );
+  }
+
   @override
   List<Object?> get props => [
         id,
